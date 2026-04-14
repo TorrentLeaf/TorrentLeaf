@@ -1,0 +1,197 @@
+# TorrentLeaf — ambiente de desenvolvimento local
+#
+# Sobe a stack completa: infra base (postgres+pgvector, redis, minio),
+# serviços de aplicação (torrent-engine, api, web) e reverse proxy Caddy.
+
+networks:
+  frontend-tier:
+    driver: bridge
+  backend-tier:
+    driver: bridge
+  db-tier:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  torrent_data:
+  caddy_data:
+  caddy_config:
+
+services:
+  # ─── PostgreSQL 16 + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: torrentleaf-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: torrentleaf
+      POSTGRES_USER: torrentleaf
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks: [db-tier]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U torrentleaf -d torrentleaf"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─── Redis 7 (cache + filas Bull) ────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: torrentleaf-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks: [db-tier]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ─── MinIO (S3-compatible) + Console ─────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: torrentleaf-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: torrentleaf
+      MINIO_ROOT_PASSWORD: secretsecret
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # API S3
+      - "9001:9001"   # Console web
+    networks: [backend-tier, db-tier]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ─── Torrent Engine (Node.js + webtorrent-hybrid) ────────────────────────────
+  torrent-engine:
+    build:
+      context: ./apps/torrent-engine
+      dockerfile: Dockerfile.dev
+    container_name: torrentleaf-engine
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: "9000"
+      REDIS_URL: redis://redis:6379
+      API_URL: http://api:8080
+      TORRENT_DOWNLOAD_PATH: /data/torrents
+      MAX_TORRENTS: "50"
+      MAX_DISK_GB: "20"
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/torrent-engine/src:/app/src
+      - ./apps/torrent-engine/tsconfig.json:/app/tsconfig.json
+      - torrent_data:/data/torrents
+    ports:
+      - "9090:9000"
+    networks: [backend-tier, db-tier]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/engine/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── API (Go + Fiber) ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.dev
+    container_name: torrentleaf-api
+    restart: unless-stopped
+    environment:
+      ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgresql://torrentleaf:secret@postgres:5432/torrentleaf?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      TORRENT_ENGINE_URL: http://torrent-engine:9000
+      JWT_SECRET: dev-jwt-secret-change-in-production-32c
+      JWT_REFRESH_SECRET: dev-refresh-secret-change-in-prod-32c
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: torrentleaf
+      MINIO_SECRET_KEY: secretsecret
+      LOG_LEVEL: debug
+    volumes:
+      - ./apps/api:/app
+      # evita que o node_modules/go cache do host sobrescreva o do container
+      - /app/tmp
+    ports:
+      - "8080:8080"
+    networks: [frontend-tier, backend-tier, db-tier]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      torrent-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ─── Web (Next.js 16) ────────────────────────────────────────────────────────
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile.dev
+    container_name: torrentleaf-web
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      NEXT_PUBLIC_WS_URL: ws://localhost:8080
+    volumes:
+      - ./apps/web/src:/app/src
+      - ./apps/web/public:/app/public
+      - ./apps/web/next.config.mjs:/app/next.config.mjs
+      - ./apps/web/tailwind.config.ts:/app/tailwind.config.ts
+      - ./apps/web/postcss.config.mjs:/app/postcss.config.mjs
+      - ./apps/web/tsconfig.json:/app/tsconfig.json
+    ports:
+      - "3000:3000"
+    networks: [frontend-tier, backend-tier]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # ─── Caddy (reverse proxy) ───────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: torrentleaf-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [frontend-tier]
+    depends_on:
+      - web
+      - api

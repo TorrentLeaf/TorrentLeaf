@@ -1,0 +1,41 @@
+# TorrentLeaf — Caddy reverse proxy (development)
+#
+# Acesse tudo via http://localhost em um só host, sem CORS entre serviços.
+# Em produção este arquivo é substituído pelo Caddyfile com TLS automático.
+
+{
+	# Dev: desativa HTTPS automático e logs mais verbosos
+	auto_https off
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	# API REST
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+
+	# Health / metrics do backend
+	handle /health {
+		reverse_proxy api:8080
+	}
+	handle /metrics {
+		reverse_proxy api:8080
+	}
+
+	# WebSocket (mesma porta do backend)
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	handle @websocket {
+		reverse_proxy api:8080
+	}
+
+	# Frontend Next.js (inclui HMR via _next/webpack-hmr)
+	handle {
+		reverse_proxy web:3000
+	}
+}
