@@ -1,0 +1,83 @@
+# ===========================
+# Dependencies
+# ===========================
+node_modules/
+.pnpm-store/
+
+# ===========================
+# Build outputs
+# ===========================
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+
+# TypeScript build outputs
+dist/
+*.tsbuildinfo
+
+# Go binary
+apps/api/server
+apps/api/tmp/
+
+# ===========================
+# Environment variables
+# ===========================
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ===========================
+# IDE / Editor
+# ===========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===========================
+# Turbo
+# ===========================
+.turbo/
+
+# ===========================
+# Testing / Coverage
+# ===========================
+coverage/
+*.cover
+*.out
+*.prof
+
+# ===========================
+# Docker
+# ===========================
+*.log
+
+# ===========================
+# OS files
+# ===========================
+.DS_Store
+Desktop.ini
+ehthumbs.db
+
+# ===========================
+# Torrent data (runtime)
+# ===========================
+/data/
+*.torrent
+
+# ===========================
+# MinIO local data
+# ===========================
+minio-data/
+
+# ===========================
+# Misc
+# ===========================
+*.bak
+*.tmp
+*.temp
