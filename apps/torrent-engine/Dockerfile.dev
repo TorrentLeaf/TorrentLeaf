@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# webtorrent-hybrid precisa de bibliotecas nativas (wrtc)
+RUN apk add --no-cache python3 make g++ curl git
+
+COPY package.json ./
+RUN npm install --no-audit --no-fund
+
+COPY . .
+
+EXPOSE 9000
+
+CMD ["npx", "tsx", "watch", "src/index.ts"]

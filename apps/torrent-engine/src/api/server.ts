@@ -1,0 +1,34 @@
+import Fastify, { type FastifyInstance } from 'fastify'
+import { config, isProduction } from '../config.js'
+import { registerTorrentRoutes } from './routes/torrents.js'
+import { registerStreamRoutes } from './routes/stream.js'
+
+export async function buildServer(): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: {
+      level: config.logLevel,
+      base: { service: 'torrent-engine' },
+      transport: isProduction
+        ? undefined
+        : {
+            target: 'pino-pretty',
+            options: { colorize: true, translateTime: 'SYS:HH:MM:ss.l' },
+          },
+    },
+    bodyLimit: 1 * 1024 * 1024,
+    disableRequestLogging: false,
+  })
+
+  app.get('/engine/health', async () => ({ status: 'ok' }))
+
+  await registerTorrentRoutes(app)
+  await registerStreamRoutes(app)
+
+  app.setErrorHandler((err, _req, reply) => {
+    app.log.error({ err }, 'request error')
+    const status = err.statusCode ?? 500
+    reply.status(status).send({ error: status >= 500 ? 'internal error' : err.message })
+  })
+
+  return app
+}
