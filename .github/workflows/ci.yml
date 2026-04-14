@@ -1,0 +1,259 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Frontend ────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test --run --reporter=verbose --coverage
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          flags: frontend
+          directory: apps/web/coverage
+
+      - name: Build
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+          NEXT_PUBLIC_WS_URL: ws://localhost:8080
+
+  # ─── Backend Go ──────────────────────────────────────────────────────────────
+  backend:
+    name: Backend (Go)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: torrentleaf_test
+          POSTGRES_USER: torrentleaf
+          POSTGRES_PASSWORD: secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: apps/api/go.sum
+
+      - name: Install tools
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
+      - name: Download deps
+        run: go mod download
+
+      - name: Lint
+        run: golangci-lint run ./...
+
+      - name: Vulnerability check
+        run: govulncheck ./...
+
+      - name: Run migrations
+        run: |
+          migrate -path migrations -database \
+            "postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test?sslmode=disable" up
+        env:
+          DATABASE_URL: postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test
+
+      - name: Unit tests
+        run: go test -v -race -coverprofile=coverage.out ./internal/...
+        env:
+          DATABASE_URL: postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test?sslmode=disable
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-minimum-32-characters!!
+          TORRENT_ENGINE_URL: http://localhost:9000
+
+      - name: Integration tests
+        run: go test -v -race -tags=integration ./...
+        env:
+          DATABASE_URL: postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test?sslmode=disable
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-secret-minimum-32-characters!!
+          TORRENT_ENGINE_URL: http://localhost:9000
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          flags: backend
+          files: apps/api/coverage.out
+
+      - name: Build binary
+        run: go build -ldflags="-w -s" -o /dev/null ./cmd/server
+
+  # ─── Torrent Engine ───────────────────────────────────────────────────────────
+  torrent-engine:
+    name: Torrent Engine (Node.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/torrent-engine
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install system deps (for webtorrent-hybrid native modules)
+        run: sudo apt-get install -y python3 make g++
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Type check
+        run: pnpm tsc --noEmit
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test --run --reporter=verbose --coverage
+        env:
+          NODE_ENV: test
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          flags: torrent-engine
+
+      - name: Build
+        run: pnpm build
+
+  # ─── Security Scan ────────────────────────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, torrent-engine]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          severity: "CRITICAL,HIGH"
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  # ─── E2E Tests ────────────────────────────────────────────────────────────────
+  e2e:
+    name: E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    needs: [frontend, backend, torrent-engine]
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Start services
+        run: docker compose -f docker-compose.dev.yml up -d
+        timeout-minutes: 3
+
+      - name: Wait for services
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/health && break
+            sleep 2
+          done
+
+      - name: Run E2E tests
+        run: pnpm -F web test:e2e
+        env:
+          BASE_URL: http://localhost:3000
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
