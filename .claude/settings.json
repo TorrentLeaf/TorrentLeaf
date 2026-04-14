@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(go *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(pnpm *)",
+      "Bash(docker compose *)",
+      "Bash(docker *)",
+      "Bash(git *)",
+      "Bash(psql *)",
+      "Bash(redis-cli *)",
+      "Bash(curl http://localhost:*)",
+      "Bash(curl http://api:*)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(rm apps/*)",
+      "Bash(rm packages/*)",
+      "Bash(rm infra/*)",
+      "Bash(chmod *)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(curl https://* | bash)",
+      "Bash(wget * | sh)"
+    ]
+  },
+  "env": {
+    "GOPATH": "/home/claude/go",
+    "GOFLAGS": "-mod=mod"
+  }
+}

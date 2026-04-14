@@ -1,0 +1,69 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-postgres",
+        "${DATABASE_URL}"
+      ],
+      "env": {
+        "DATABASE_URL": "postgresql://torrentleaf:secret@localhost:5432/torrentleaf"
+      },
+      "description": "Acesso direto ao banco PostgreSQL do TorrentLeaf para queries, análise de schema e debugging"
+    },
+
+    "redis": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "redis-mcp-server"
+      ],
+      "env": {
+        "REDIS_URL": "redis://localhost:6379"
+      },
+      "description": "Inspecionar cache Redis, filas Bull e pub/sub do progresso de torrents"
+    },
+
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "Gerenciar issues, PRs, branches e CI/CD do repositório TorrentLeaf"
+    },
+
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/italo/projects/torrentleaf"
+      ],
+      "description": "Acesso ao filesystem do projeto para leitura de logs, configs e arquivos gerados"
+    },
+
+    "docker": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "docker-mcp-server"
+      ],
+      "description": "Gerenciar containers Docker: status, logs, restart de serviços do TorrentLeaf"
+    },
+
+    "torrentleaf": {
+      "command": "node",
+      "args": ["tools/mcp-torrentleaf/dist/index.js"],
+      "env": {
+        "TORRENTLEAF_API_URL": "http://localhost:8080",
+        "TORRENTLEAF_DEV_TOKEN": "${DEV_JWT_TOKEN}"
+      },
+      "description": "MCP customizado do TorrentLeaf — testa endpoints, verifica streams, inspeciona filas e roda smoke tests diretamente da API durante desenvolvimento. Tools: health_check, add_torrent, list_torrents, get_torrent, get_reader_pages, check_stream, get_reading_progress, inspect_queue, get_metrics, simulate_reading_session"
+    }
+  }
+}
