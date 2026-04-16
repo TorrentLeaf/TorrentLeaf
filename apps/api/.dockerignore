@@ -1,5 +1,6 @@
 tmp
 bin
+.gocache
 .env
 .env.*
 !.env.example

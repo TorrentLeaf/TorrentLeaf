@@ -9,20 +9,36 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
 	"github.com/seuuser/torrentleaf/api/internal/handler"
+	"github.com/seuuser/torrentleaf/api/internal/middleware"
+	"github.com/seuuser/torrentleaf/api/internal/repository"
+	"github.com/seuuser/torrentleaf/api/internal/service"
 	"github.com/seuuser/torrentleaf/api/pkg/cache"
 	"github.com/seuuser/torrentleaf/api/pkg/config"
 	"github.com/seuuser/torrentleaf/api/pkg/db"
 	"github.com/seuuser/torrentleaf/api/pkg/logger"
 )
+
+type deps struct {
+	log           zerolog.Logger
+	authSvc       service.AuthService
+	torrentSvc    service.TorrentService
+	readerSvc     service.ReaderService
+	progressSvc   service.ProgressService
+	redis         *redis.Client
+	engineURL     string
+	webhookSecret string
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -41,14 +57,39 @@ func main() {
 	}
 	defer pool.Close()
 
-	redis, err := cache.Connect(rootCtx, cfg.RedisURL)
+	redisClient, err := cache.Connect(rootCtx, cfg.RedisURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to redis")
 	}
-	defer func() { _ = redis.Close() }()
+	defer func() { _ = redisClient.Close() }()
+
+	userRepo := repository.NewUserRepository(pool)
+	authSvc := service.NewAuthService(userRepo, service.AuthConfig{
+		AccessSecret:  []byte(cfg.JWTSecret),
+		RefreshSecret: []byte(cfg.JWTRefreshSecret),
+		AccessTTL:     cfg.JWTAccessTTL,
+		RefreshTTL:    cfg.JWTRefreshTTL,
+	})
+
+	sessionRepo := repository.NewTorrentRepository(pool)
+	fileRepo := repository.NewTorrentFileRepository(pool)
+	progressRepo := repository.NewProgressRepository(pool)
+	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
+	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, engineClient)
+	readerSvc := service.NewReaderService(sessionRepo, fileRepo)
+	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
 
 	app := newApp(log)
-	registerRoutes(app, log)
+	registerRoutes(app, deps{
+		log:           log,
+		authSvc:       authSvc,
+		torrentSvc:    torrentSvc,
+		readerSvc:     readerSvc,
+		progressSvc:   progressSvc,
+		redis:         redisClient.Client,
+		engineURL:     cfg.TorrentEngineURL,
+		webhookSecret: cfg.APIWebhookSecret,
+	})
 
 	go func() {
 		addr := ":" + cfg.Port
@@ -76,7 +117,7 @@ func newApp(log zerolog.Logger) *fiber.App {
 		WriteTimeout: 30 * time.Second,
 		ErrorHandler: func(c *fiber.Ctx, err error) error {
 			code := fiber.StatusInternalServerError
-			msg := "erro interno"
+			msg := "internal error"
 			var fe *fiber.Error
 			if errors.As(err, &fe) {
 				code = fe.Code
@@ -99,35 +140,56 @@ func newApp(log zerolog.Logger) *fiber.App {
 	return app
 }
 
-func registerRoutes(app *fiber.App, log zerolog.Logger) {
+func registerRoutes(app *fiber.App, d deps) {
+	// Internal webhook endpoints (engine → api). Guarded by shared secret.
+	internalWebhook := handler.NewInternalWebhookHandler(d.log, d.torrentSvc, d.webhookSecret)
+	internal := app.Group("/internal", internalWebhook.RequireSecret())
+	internal.Post("/torrents/:infoHash/metadata", internalWebhook.Metadata)
+
 	api := app.Group("/api/v1")
 
-	auth := handler.NewAuthHandler(log)
+	// Public auth routes.
+	auth := handler.NewAuthHandler(d.log, d.authSvc)
 	api.Post("/auth/register", auth.Register)
 	api.Post("/auth/login", auth.Login)
 	api.Post("/auth/refresh", auth.Refresh)
 	api.Post("/auth/logout", auth.Logout)
 
-	torrents := handler.NewTorrentHandler(log)
-	api.Post("/torrents", torrents.Add)
-	api.Get("/torrents", torrents.List)
-	api.Get("/torrents/:id", torrents.Get)
-	api.Delete("/torrents/:id", torrents.Delete)
-	api.Post("/torrents/:id/priority", torrents.SetPriority)
+	// WebSocket — uses WS-specific auth so browsers can pass ?token=.
+	ws := handler.NewTorrentWSHandler(d.log, d.torrentSvc, d.redis)
+	api.Get("/torrents/:id/ws",
+		middleware.RequireAuthWS(d.authSvc),
+		ws.Upgrade,
+		websocket.New(ws.Stream),
+	)
 
-	reader := handler.NewReaderHandler(log)
-	api.Get("/reader/:id/pages", reader.GetPages)
-	api.Get("/stream/:fileId/:page", reader.StreamPage)
+	// All routes below require a valid access token.
+	protected := api.Group("", middleware.RequireAuth(d.authSvc))
 
-	library := handler.NewLibraryHandler(log)
-	api.Get("/library", library.List)
-	api.Post("/library", library.Add)
-	api.Delete("/library/:id", library.Remove)
+	torrents := handler.NewTorrentHandler(d.log, d.torrentSvc)
+	protected.Post("/torrents", torrents.Add)
+	protected.Get("/torrents", torrents.List)
+	protected.Get("/torrents/:id", torrents.Get)
+	protected.Delete("/torrents/:id", torrents.Delete)
+	protected.Post("/torrents/:id/priority", torrents.SetPriority)
 
-	progress := handler.NewProgressHandler(log)
-	api.Get("/progress/:fileId", progress.Get)
-	api.Put("/progress/:fileId", progress.Update)
+	reader := handler.NewReaderHandler(d.log, d.readerSvc, d.engineURL)
+	protected.Get("/reader/:id/pages", reader.GetPages)
 
-	admin := handler.NewAdminHandler(log)
-	api.Get("/admin/torrents", admin.ListTorrents)
+	// Stream routes use RequireAuthWS so <img>/<video> tags can pass ?token=
+	// on the URL (browsers cannot attach Authorization headers to these).
+	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
+	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
+
+	library := handler.NewLibraryHandler(d.log)
+	protected.Get("/library", library.List)
+	protected.Post("/library", library.Add)
+	protected.Delete("/library/:id", library.Remove)
+
+	progress := handler.NewProgressHandler(d.log, d.progressSvc)
+	protected.Get("/progress/:fileId", progress.Get)
+	protected.Put("/progress/:fileId", progress.Update)
+
+	admin := handler.NewAdminHandler(d.log)
+	protected.Get("/admin/torrents", middleware.RequireAdmin(), admin.ListTorrents)
 }

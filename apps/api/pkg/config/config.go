@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -17,9 +18,12 @@ type Config struct {
 	TorrentEngineURL string
 	JWTSecret        string
 	JWTRefreshSecret string
+	JWTAccessTTL     time.Duration
+	JWTRefreshTTL    time.Duration
 	MinioEndpoint    string
 	MinioAccessKey   string
 	MinioSecretKey   string
+	APIWebhookSecret string
 }
 
 func Load() (*Config, error) {
@@ -34,9 +38,12 @@ func Load() (*Config, error) {
 		TorrentEngineURL: os.Getenv("TORRENT_ENGINE_URL"),
 		JWTSecret:        os.Getenv("JWT_SECRET"),
 		JWTRefreshSecret: os.Getenv("JWT_REFRESH_SECRET"),
+		JWTAccessTTL:     parseDuration(getenv("JWT_ACCESS_TTL", "15m")),
+		JWTRefreshTTL:    parseDuration(getenv("JWT_REFRESH_TTL", "168h")),
 		MinioEndpoint:    os.Getenv("MINIO_ENDPOINT"),
 		MinioAccessKey:   os.Getenv("MINIO_ACCESS_KEY"),
 		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
+		APIWebhookSecret: os.Getenv("API_WEBHOOK_SECRET"),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -60,9 +67,26 @@ func (c *Config) validate() error {
 		missing = append(missing, "JWT_REFRESH_SECRET")
 	}
 	if len(missing) > 0 {
-		return fmt.Errorf("config: variáveis obrigatórias ausentes: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("config: missing required variables: %s", strings.Join(missing, ", "))
+	}
+	if len(c.JWTSecret) < 32 {
+		return fmt.Errorf("config: JWT_SECRET must be at least 32 characters")
+	}
+	if len(c.JWTRefreshSecret) < 32 {
+		return fmt.Errorf("config: JWT_REFRESH_SECRET must be at least 32 characters")
+	}
+	if c.JWTSecret == c.JWTRefreshSecret {
+		return fmt.Errorf("config: JWT_SECRET and JWT_REFRESH_SECRET must differ")
 	}
 	return nil
+}
+
+func parseDuration(s string) time.Duration {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 15 * time.Minute
+	}
+	return d
 }
 
 func (c *Config) IsProduction() bool {
