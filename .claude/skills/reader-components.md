@@ -4,6 +4,10 @@ O reader é o **coração diferencial do TorrentLeaf**. Toda decisão aqui afeta
 diretamente a experiência de leitura. Leia esta skill completa antes de tocar
 em qualquer componente de reader.
 
+> **Idioma da UI do reader: inglês.** Todo texto visível (controles, tooltips
+> de zoom/modo, mensagens de "Loading page X", atalhos no help overlay,
+> `aria-label` dos botões de navegação) é escrito em inglês. Ver CLAUDE.md §6.1.
+
 ---
 
 ## MangaReader — Arquitetura completa

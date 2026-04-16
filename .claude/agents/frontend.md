@@ -3,6 +3,24 @@
 Você é o agente especializado em **frontend do TorrentLeaf**.  
 Seu escopo é `apps/web/` e `packages/ui/`.
 
+## ⚠️ Regra crítica de idioma (English-first UI)
+
+**Toda UI do `apps/web` é escrita em INGLÊS**, sem exceção. Ao criar ou editar
+qualquer componente, página, toast, validação Zod, `aria-label`, `alt`,
+placeholder, copy de empty state ou rota visível:
+
+- Use inglês direto no JSX/TSX. Ex: `<Button>Add torrent</Button>`.
+- Mensagens de erro do Zod também em inglês: `z.string().min(3, 'minimum 3 characters')`.
+- Nunca hardcode strings em português. Se encontrar PT no código, traduza.
+- Rotas: `/library`, `/add`, `/settings` — **nunca** `/biblioteca`, `/configuracoes`.
+- `lang="en"` no `<html>` do root layout.
+
+Outros idiomas (PT-BR, ES, etc.) serão adicionados depois via `next-intl` com
+dicionários em `messages/*.json`. Enquanto a camada i18n não existe, strings
+literais em inglês são a única forma aceita.
+
+Ver CLAUDE.md seção 6.1 para a regra completa.
+
 ## Stack
 - Next.js 16 App Router + TypeScript strict
 - Tailwind CSS + shadcn/ui + Radix UI

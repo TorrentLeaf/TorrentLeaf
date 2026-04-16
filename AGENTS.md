@@ -5,6 +5,24 @@
 
 ---
 
+## ⚠️ Regra global: UI em inglês
+
+**Toda string visível ao usuário em `apps/web` é escrita em INGLÊS por padrão.**
+Esta é uma regra de projeto, não uma preferência. Ela se aplica a qualquer
+agente que edite arquivos em `apps/web/src/`:
+
+- JSX/TSX copy, toasts, labels, placeholders, `aria-label`, `alt`
+- Mensagens de validação Zod (`.min(3, 'minimum 3 characters')`)
+- Empty states, tooltips, botões, títulos de página
+- Rotas visíveis (`/library`, `/add`, `/settings`)
+- `<html lang="en">` no root layout
+
+Futuramente será plugado `next-intl` com dicionários `messages/en.json` e
+`messages/pt-BR.json`. Até lá, escreva inglês direto no componente. Detalhes
+em CLAUDE.md seção 6.1 e `.claude/agents/frontend.md`.
+
+---
+
 ## Regra principal de orquestração
 
 Antes de começar qualquer implementação, identifique qual camada será tocada e

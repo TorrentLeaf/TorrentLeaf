@@ -1,5 +1,15 @@
 # Skill: Design System TorrentLeaf
 
+## ⚠️ Idioma dos componentes: inglês
+
+Qualquer texto visível em componente deste design system (labels, placeholders,
+`aria-label`, tooltips, mensagens de estado vazio/erro) é escrito em **inglês**.
+Não existe componente com copy em português no `apps/web`. Essa regra vale para
+botões, cards, formulários, reader UI, skeletons — tudo.
+
+Ao criar variantes de componentes em Storybook/docs, os exemplos também usam
+texto em inglês. Ver CLAUDE.md §6.1 para a regra completa.
+
 ## Tokens de Design
 
 ```css
