@@ -12,23 +12,23 @@ export default function AddTorrentPage() {
 
   async function handleAdd(magnetURI: string) {
     const { data } = await api.post<{ id: string; name: string }>('/torrents', { magnetURI })
-    toast({ title: 'Torrent adicionado', description: data.name ?? 'Buscando metadata…' })
-    router.push('/')
+    toast({ title: 'Torrent added', description: data.name || 'Fetching metadata…' })
+    router.push(`/torrents/${data.id}` as never)
   }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Adicionar torrent</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Add torrent</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Cole um link magnet do Nyaa.si ou de qualquer tracker público.
+          Paste a magnet link from Nyaa.si or any public tracker.
         </p>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>Magnet link</CardTitle>
-          <CardDescription>O swarm conecta em segundos; a leitura começa antes do download completo.</CardDescription>
+          <CardDescription>The swarm connects in seconds; reading starts before the download completes.</CardDescription>
         </CardHeader>
         <CardContent>
           <MagnetInput onSubmit={handleAdd} />

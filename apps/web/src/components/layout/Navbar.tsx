@@ -20,20 +20,20 @@ export function Navbar() {
           <Button asChild variant="ghost" size="sm">
             <Link href="/">
               <Library className="mr-2 h-4 w-4" />
-              Biblioteca
+              Library
             </Link>
           </Button>
           <Button asChild variant="default" size="sm">
             <Link href="/add">
               <Plus className="mr-2 h-4 w-4" />
-              Adicionar
+              Add
             </Link>
           </Button>
           {!user && (
             <Button asChild variant="outline" size="sm">
               <Link href="/login">
                 <LogIn className="mr-2 h-4 w-4" />
-                Entrar
+                Sign in
               </Link>
             </Button>
           )}

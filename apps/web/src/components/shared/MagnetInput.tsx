@@ -26,7 +26,7 @@ export function MagnetInput({
     const trimmed = value.trim()
 
     if (!MAGNET_RE.test(trimmed)) {
-      setError('Link magnet inválido — deve começar com magnet:?xt=urn:btih:')
+      setError('Invalid magnet link — it must start with magnet:?xt=urn:btih:')
       return
     }
 
@@ -35,7 +35,7 @@ export function MagnetInput({
       await onSubmit(trimmed)
       setValue('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Erro ao adicionar')
+      setError(err instanceof Error ? err.message : 'Failed to add torrent')
     } finally {
       setLoading(false)
     }
@@ -55,7 +55,7 @@ export function MagnetInput({
           />
         </div>
         <Button type="submit" disabled={loading || !value}>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Adicionar'}
+          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
         </Button>
       </div>
       {error && <p className="text-sm text-destructive">{error}</p>}

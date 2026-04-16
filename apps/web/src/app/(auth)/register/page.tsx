@@ -12,9 +12,9 @@ import { api } from '@/lib/api'
 import { useToast } from '@/hooks/use-toast'
 
 const RegisterSchema = z.object({
-  username: z.string().min(3, 'mínimo 3 caracteres').max(50),
-  email: z.string().email('e-mail inválido'),
-  password: z.string().min(8, 'mínimo 8 caracteres'),
+  username: z.string().min(3, 'minimum 3 characters').max(50),
+  email: z.string().email('invalid email'),
+  password: z.string().min(8, 'minimum 8 characters'),
 })
 
 type RegisterInput = z.infer<typeof RegisterSchema>
@@ -29,12 +29,12 @@ export default function RegisterPage() {
   async function onSubmit(values: RegisterInput) {
     try {
       await api.post('/auth/register', values)
-      toast({ title: 'Conta criada', description: 'Faça login para continuar.' })
+      toast({ title: 'Account created', description: 'Sign in to continue.' })
       router.push('/login')
     } catch (err) {
       toast({
-        title: 'Falha no cadastro',
-        description: err instanceof Error ? err.message : 'Tente novamente.',
+        title: 'Sign-up failed',
+        description: err instanceof Error ? err.message : 'Please try again.',
         variant: 'destructive',
       })
     }
@@ -43,39 +43,39 @@ export default function RegisterPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Criar conta</CardTitle>
-        <CardDescription>Sua biblioteca pessoal, self-hosted.</CardDescription>
+        <CardTitle>Create account</CardTitle>
+        <CardDescription>Your personal library, self-hosted.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Usuário</label>
+            <label className="text-sm font-medium">Username</label>
             <Input autoComplete="username" {...register('username')} />
             {formState.errors.username && (
               <p className="text-xs text-destructive">{formState.errors.username.message}</p>
             )}
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">E-mail</label>
+            <label className="text-sm font-medium">Email</label>
             <Input type="email" autoComplete="email" {...register('email')} />
             {formState.errors.email && (
               <p className="text-xs text-destructive">{formState.errors.email.message}</p>
             )}
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Senha</label>
+            <label className="text-sm font-medium">Password</label>
             <Input type="password" autoComplete="new-password" {...register('password')} />
             {formState.errors.password && (
               <p className="text-xs text-destructive">{formState.errors.password.message}</p>
             )}
           </div>
           <Button type="submit" className="w-full" disabled={formState.isSubmitting}>
-            Criar conta
+            Create account
           </Button>
           <p className="text-center text-sm text-muted-foreground">
-            Já tem conta?{' '}
+            Already have an account?{' '}
             <Link href="/login" className="text-accent hover:underline">
-              Entrar
+              Sign in
             </Link>
           </p>
         </form>

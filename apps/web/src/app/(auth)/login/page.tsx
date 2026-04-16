@@ -13,8 +13,8 @@ import { useAuthStore } from '@/store/auth'
 import { useToast } from '@/hooks/use-toast'
 
 const LoginSchema = z.object({
-  email: z.string().email('e-mail inválido'),
-  password: z.string().min(8, 'mínimo 8 caracteres'),
+  email: z.string().email('invalid email'),
+  password: z.string().min(8, 'minimum 8 characters'),
 })
 
 type LoginInput = z.infer<typeof LoginSchema>
@@ -38,8 +38,8 @@ export default function LoginPage() {
       router.push('/')
     } catch (err) {
       toast({
-        title: 'Falha no login',
-        description: err instanceof Error ? err.message : 'Tente novamente.',
+        title: 'Sign-in failed',
+        description: err instanceof Error ? err.message : 'Please try again.',
         variant: 'destructive',
       })
     }
@@ -48,32 +48,32 @@ export default function LoginPage() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Entrar</CardTitle>
-        <CardDescription>Acesse sua biblioteca e continue lendo.</CardDescription>
+        <CardTitle>Sign in</CardTitle>
+        <CardDescription>Access your library and keep reading.</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">E-mail</label>
+            <label className="text-sm font-medium">Email</label>
             <Input type="email" autoComplete="email" {...register('email')} />
             {formState.errors.email && (
               <p className="text-xs text-destructive">{formState.errors.email.message}</p>
             )}
           </div>
           <div className="space-y-1.5">
-            <label className="text-sm font-medium">Senha</label>
+            <label className="text-sm font-medium">Password</label>
             <Input type="password" autoComplete="current-password" {...register('password')} />
             {formState.errors.password && (
               <p className="text-xs text-destructive">{formState.errors.password.message}</p>
             )}
           </div>
           <Button type="submit" className="w-full" disabled={formState.isSubmitting}>
-            Entrar
+            Sign in
           </Button>
           <p className="text-center text-sm text-muted-foreground">
-            Não tem conta?{' '}
+            Don&apos;t have an account?{' '}
             <Link href="/register" className="text-accent hover:underline">
-              Criar agora
+              Create one
             </Link>
           </p>
         </form>

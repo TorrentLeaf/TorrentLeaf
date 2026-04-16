@@ -6,13 +6,13 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'TorrentLeaf',
-  description: 'Leia mangás, livros e documentos direto do swarm BitTorrent.',
+  description: 'Read manga, books, and documents streamed directly from the BitTorrent swarm.',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
-      lang="pt-BR"
+      lang="en"
       className={`${GeistSans.variable} ${GeistMono.variable} dark`}
       suppressHydrationWarning
     >

@@ -25,6 +25,7 @@
     "geist": "^1.7.0",
     "lucide-react": "^0.577.0",
     "next": "^16.2.3",
+    "pdfjs-dist": "^4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
     "react-hook-form": "^7.72.1",
