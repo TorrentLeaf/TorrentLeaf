@@ -2,19 +2,39 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/seuuser/torrentleaf/api/internal/domain"
 )
 
+// LibraryListFilter narrows down ListByUser results. Zero value ("any type",
+// FavoritesOnly=false) returns every item owned by the user.
+type LibraryListFilter struct {
+	Type          domain.LibraryItemType // empty = any
+	FavoritesOnly bool
+}
+
+// LibraryItemWithMeta enriches a library item with per-user derived state
+// (favorite flag + last-read progress) so the list endpoint can render cards
+// in a single query.
+type LibraryItemWithMeta struct {
+	Item          domain.LibraryItem
+	IsFavorite    bool
+	LastReadPage  *int
+	LastReadTotal *int
+	LastReadAt    *time.Time
+}
+
 type LibraryRepository interface {
 	Create(ctx context.Context, item domain.LibraryItem) (*domain.LibraryItem, error)
-	ListByUser(ctx context.Context, userID uuid.UUID) ([]domain.LibraryItem, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.LibraryItem, error)
+	ListByUser(ctx context.Context, userID uuid.UUID, filter LibraryListFilter) ([]LibraryItemWithMeta, error)
 	Delete(ctx context.Context, id uuid.UUID) error
 }
 
-type ReadingProgressRepository interface {
-	Get(ctx context.Context, userID, fileID uuid.UUID) (*domain.ReadingProgress, error)
-	Upsert(ctx context.Context, progress domain.ReadingProgress) error
+type FavoritesRepository interface {
+	Add(ctx context.Context, userID, sessionID uuid.UUID) error
+	Remove(ctx context.Context, userID, sessionID uuid.UUID) error
 }
