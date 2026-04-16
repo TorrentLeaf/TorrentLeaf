@@ -95,6 +95,7 @@ services:
       TORRENT_DOWNLOAD_PATH: /data/torrents
       MAX_TORRENTS: "50"
       MAX_DISK_GB: "20"
+      API_WEBHOOK_SECRET: dev-webhook-secret-change-in-prod
       LOG_LEVEL: debug
     volumes:
       - ./apps/torrent-engine/src:/app/src
@@ -128,6 +129,7 @@ services:
       TORRENT_ENGINE_URL: http://torrent-engine:9000
       JWT_SECRET: dev-jwt-secret-change-in-production-32c
       JWT_REFRESH_SECRET: dev-refresh-secret-change-in-prod-32c
+      API_WEBHOOK_SECRET: dev-webhook-secret-change-in-prod
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: torrentleaf
       MINIO_SECRET_KEY: secretsecret
