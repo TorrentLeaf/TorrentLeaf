@@ -16,9 +16,10 @@ apps/web/out/
 dist/
 *.tsbuildinfo
 
-# Go binary
+# Go binary and cache
 apps/api/server
 apps/api/tmp/
+.gocache/
 
 # ===========================
 # Environment variables
