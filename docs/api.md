@@ -321,6 +321,76 @@ pagination is done by the browser's range loader, not the server.
 
 ---
 
+## Library
+
+### `GET /api/v1/library`
+
+List the authenticated user's library. Each card includes a `isFavorite` flag
+and the most recent reading-progress across the session's files.
+
+**Query params:**
+
+| Param | Values | Description |
+|-------|--------|-------------|
+| `type` | `manga`, `book`, `document`, `other`, `all` (default) | Filter by content type |
+| `favorites` | `true` | Show favorites only |
+
+**Response** — `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "sessionId": "uuid",
+    "title": "…",
+    "coverUrl": "…",
+    "type": "manga",
+    "addedAt": "2026-04-16T00:00:00Z",
+    "isFavorite": true,
+    "currentPage": 12,
+    "totalPages": 30,
+    "lastReadAt": "2026-04-16T00:00:00Z"
+  }
+]
+```
+
+### `POST /api/v1/library`
+
+Add a torrent session to the library. Title defaults to the session name if
+empty. `type` defaults to `other`. The session must belong to the user.
+
+**Request**
+
+```json
+{ "sessionId": "uuid", "type": "manga", "title": "Optional custom title" }
+```
+
+- `201 Created` — `libraryCardDTO`
+- `409 Conflict` — session already in library
+- `422 Unprocessable Entity` — invalid sessionId or type
+- `404 Not Found` — session not found or not owned
+
+### `DELETE /api/v1/library/:id`
+
+- `204 No Content`
+- `404 Not Found`
+
+### `POST /api/v1/library/:id/favorite`
+
+Mark a library item as favorite (idempotent).
+
+- `204 No Content`
+- `404 Not Found`
+
+### `DELETE /api/v1/library/:id/favorite`
+
+Unmark a library item as favorite.
+
+- `204 No Content`
+- `404 Not Found`
+
+---
+
 ## Progress
 
 ### `GET /api/v1/progress/:fileId`
@@ -362,6 +432,63 @@ to `paginated` when empty.
 - `422 Unprocessable Entity` — `currentPage` is negative, greater than
   `totalPages`, or `readingMode` is not one of the three known values
 - `404 Not Found` — file does not exist or is not owned by the user
+
+---
+
+## Admin
+
+All admin endpoints require authentication **and** `role = "admin"`.
+
+### `GET /api/v1/admin/torrents`
+
+List every torrent session in the system, newest first. Each item includes
+`userId`, speeds, peers, and download progress — everything needed to render
+a live dashboard.
+
+**Response** — `200 OK`
+
+```json
+[
+  {
+    "id": "uuid",
+    "userId": "uuid",
+    "infoHash": "40-hex",
+    "name": "…",
+    "status": "downloading",
+    "totalSize": 0,
+    "downloadedBytes": 0,
+    "peersCount": 5,
+    "downloadSpeed": 1048576,
+    "uploadSpeed": 0,
+    "createdAt": "2026-04-16T00:00:00Z"
+  }
+]
+```
+
+### `POST /api/v1/admin/torrents/:id/pause`
+
+Pause a torrent. Sets DB status to `paused` and best-effort removes it from
+the engine. Idempotent — calling on an already-paused torrent is a no-op.
+
+- `204 No Content`
+- `404 Not Found`
+
+### `POST /api/v1/admin/torrents/:id/resume`
+
+Resume a paused torrent. Re-adds the magnet to the engine and transitions
+status back to `downloading`.
+
+- `204 No Content`
+- `422 Unprocessable Entity` — session is not paused
+- `404 Not Found`
+
+### `DELETE /api/v1/admin/torrents/:id`
+
+Delete a torrent from both the engine and the database (cascades to files,
+progress, library items).
+
+- `204 No Content`
+- `404 Not Found`
 
 ---
 
