@@ -71,6 +71,26 @@ func (r *torrentRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]domai
 	return out, rows.Err()
 }
 
+func (r *torrentRepo) ListAll(ctx context.Context) ([]domain.TorrentSession, error) {
+	q := "SELECT " + torrentSessionColumns +
+		" FROM torrent_sessions ORDER BY created_at DESC"
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list all torrent sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.TorrentSession
+	for rows.Next() {
+		s, err := scanTorrentSession(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan torrent session: %w", err)
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
 func (r *torrentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status domain.TorrentStatus) error {
 	const q = `UPDATE torrent_sessions SET status = $2 WHERE id = $1`
 	tag, err := r.pool.Exec(ctx, q, id, status)

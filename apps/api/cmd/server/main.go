@@ -35,6 +35,8 @@ type deps struct {
 	torrentSvc    service.TorrentService
 	readerSvc     service.ReaderService
 	progressSvc   service.ProgressService
+	librarySvc    service.LibraryService
+	adminSvc      service.AdminService
 	redis         *redis.Client
 	engineURL     string
 	webhookSecret string
@@ -74,10 +76,14 @@ func main() {
 	sessionRepo := repository.NewTorrentRepository(pool)
 	fileRepo := repository.NewTorrentFileRepository(pool)
 	progressRepo := repository.NewProgressRepository(pool)
+	libraryRepo := repository.NewLibraryRepository(pool)
+	favoritesRepo := repository.NewFavoritesRepository(pool)
 	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
 	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, engineClient)
 	readerSvc := service.NewReaderService(sessionRepo, fileRepo)
 	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
+	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)
+	adminSvc := service.NewAdminService(sessionRepo, engineClient)
 
 	app := newApp(log)
 	registerRoutes(app, deps{
@@ -86,6 +92,8 @@ func main() {
 		torrentSvc:    torrentSvc,
 		readerSvc:     readerSvc,
 		progressSvc:   progressSvc,
+		librarySvc:    librarySvc,
+		adminSvc:      adminSvc,
 		redis:         redisClient.Client,
 		engineURL:     cfg.TorrentEngineURL,
 		webhookSecret: cfg.APIWebhookSecret,
@@ -181,15 +189,21 @@ func registerRoutes(app *fiber.App, d deps) {
 	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
 	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
 
-	library := handler.NewLibraryHandler(d.log)
+	library := handler.NewLibraryHandler(d.log, d.librarySvc)
 	protected.Get("/library", library.List)
 	protected.Post("/library", library.Add)
 	protected.Delete("/library/:id", library.Remove)
+	protected.Post("/library/:id/favorite", library.AddFavorite)
+	protected.Delete("/library/:id/favorite", library.RemoveFavorite)
 
 	progress := handler.NewProgressHandler(d.log, d.progressSvc)
 	protected.Get("/progress/:fileId", progress.Get)
 	protected.Put("/progress/:fileId", progress.Update)
 
-	admin := handler.NewAdminHandler(d.log)
-	protected.Get("/admin/torrents", middleware.RequireAdmin(), admin.ListTorrents)
+	admin := handler.NewAdminHandler(d.log, d.adminSvc)
+	adminGroup := protected.Group("/admin", middleware.RequireAdmin())
+	adminGroup.Get("/torrents", admin.ListTorrents)
+	adminGroup.Post("/torrents/:id/pause", admin.PauseTorrent)
+	adminGroup.Post("/torrents/:id/resume", admin.ResumeTorrent)
+	adminGroup.Delete("/torrents/:id", admin.DeleteTorrent)
 }

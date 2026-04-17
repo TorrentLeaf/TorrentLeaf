@@ -13,6 +13,7 @@ type TorrentRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.TorrentSession, error)
 	GetByInfoHash(ctx context.Context, infoHash string) (*domain.TorrentSession, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]domain.TorrentSession, error)
+	ListAll(ctx context.Context) ([]domain.TorrentSession, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.TorrentStatus) error
 	UpdateMetadata(ctx context.Context, infoHash, name string, totalSize int64) error
 	Delete(ctx context.Context, id uuid.UUID) error
