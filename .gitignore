@@ -82,3 +82,4 @@ minio-data/
 *.bak
 *.tmp
 *.temp
+HANDOFF.md
