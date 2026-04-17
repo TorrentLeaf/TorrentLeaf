@@ -1,9 +1,11 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
-# webtorrent-hybrid precisa de bibliotecas nativas (wrtc)
-RUN apk add --no-cache python3 make g++ curl git
+# webtorrent needs native dependencies for node-datachannel (WebRTC)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
 RUN npm install --no-audit --no-fund

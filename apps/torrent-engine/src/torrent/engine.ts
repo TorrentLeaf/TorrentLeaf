@@ -1,5 +1,5 @@
-// @ts-expect-error — webtorrent-hybrid não publica types oficiais
-import WebTorrent from 'webtorrent-hybrid'
+// @ts-expect-error — webtorrent não publica types oficiais
+import WebTorrent from 'webtorrent'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 
@@ -28,7 +28,7 @@ export type WTFile = {
 }
 
 type WTClient = {
-  add(uri: string, opts: { path: string; maxConns?: number }, cb?: (t: WTTorrent) => void): WTTorrent
+  add(uri: string, opts: Record<string, unknown>, cb?: (t: WTTorrent) => void): WTTorrent | null
   get(infoHash: string): WTTorrent | undefined
   remove(infoHash: string, cb?: (err?: Error) => void): void
   on(event: string, cb: (...args: unknown[]) => void): void
@@ -44,13 +44,15 @@ class TorrentEngine {
       maxConns: config.maxConnsPerTorrent,
       uploadLimit: -1,
       downloadLimit: -1,
+      // Disable WebRTC — server-side engine only needs TCP/uTP peers
+      webSeeds: false,
     }) as unknown as WTClient
 
     this.client.on('error', (err) => {
       logger.error({ err }, 'webtorrent client error')
     })
 
-    logger.info('webtorrent-hybrid engine initialized')
+    logger.info('webtorrent engine initialized')
   }
 
   static getInstance(): TorrentEngine {
@@ -63,18 +65,31 @@ class TorrentEngine {
   add(magnetURI: string): Promise<WTTorrent> {
     return new Promise((resolve, reject) => {
       const existing = this.tryGet(magnetURI)
-      if (existing) return resolve(existing)
+      if (existing) {
+        if (existing.ready) return resolve(existing)
+        existing.on('ready', () => resolve(existing))
+        existing.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
+        return
+      }
 
-      const torrent = this.client.add(magnetURI, {
-        path: config.downloadPath,
-        maxConns: config.maxConnsPerTorrent,
-      })
+      try {
+        const torrent = this.client.add(magnetURI, {
+          path: config.downloadPath,
+          maxConns: config.maxConnsPerTorrent,
+        })
 
-      const onReady = () => resolve(torrent)
-      const onError = (err: unknown) => reject(err instanceof Error ? err : new Error(String(err)))
+        if (!torrent) {
+          return reject(new Error('webtorrent client.add() returned null — native dependencies may be missing'))
+        }
 
-      torrent.on('ready', onReady)
-      torrent.on('error', onError)
+        logger.debug({ infoHash: torrent.infoHash ?? 'unknown' }, 'torrent added, waiting for ready')
+
+        torrent.on('ready', () => resolve(torrent))
+        torrent.on('error', (err) => reject(err instanceof Error ? err : new Error(String(err))))
+      } catch (err) {
+        logger.error({ err }, 'client.add() threw')
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
     })
   }
 
