@@ -74,6 +74,16 @@ func (r *fakeTorrentRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]dom
 	return out, nil
 }
 
+func (r *fakeTorrentRepo) ListAll(_ context.Context) ([]domain.TorrentSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.TorrentSession, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		out = append(out, *s)
+	}
+	return out, nil
+}
+
 func (r *fakeTorrentRepo) UpdateStatus(_ context.Context, id uuid.UUID, st domain.TorrentStatus) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
