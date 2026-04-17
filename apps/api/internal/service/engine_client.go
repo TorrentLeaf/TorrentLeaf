@@ -37,7 +37,7 @@ type httpEngineClient struct {
 func NewEngineClient(baseURL string) EngineClient {
 	return &httpEngineClient{
 		baseURL: baseURL,
-		http:    &http.Client{Timeout: 60 * time.Second},
+		http:    &http.Client{Timeout: 15 * time.Second},
 	}
 }
 

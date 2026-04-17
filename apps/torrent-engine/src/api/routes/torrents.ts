@@ -19,7 +19,7 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
       return
     }
     try {
-      const status = await torrentManager.add(parsed.data.magnetURI)
+      const status = torrentManager.add(parsed.data.magnetURI)
       reply.status(201).send(status)
     } catch (err) {
       reply.status(400).send({ error: (err as Error).message })

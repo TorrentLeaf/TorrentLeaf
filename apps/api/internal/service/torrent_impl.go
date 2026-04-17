@@ -63,7 +63,7 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	// we roll back the DB row so the user can retry cleanly.
 	if _, err := s.engine.Add(ctx, magnetURI); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
-		return nil, domain.NewError(domain.ErrInternal, "failed to hand torrent off to engine", err)
+		return nil, domain.NewError(domain.ErrInternal, fmt.Sprintf("engine error: %v", err), err)
 	}
 
 	return session, nil

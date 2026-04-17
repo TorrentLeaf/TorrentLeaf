@@ -12,7 +12,23 @@ const redis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerReque
 let progressTimer: NodeJS.Timeout | null = null
 
 export class TorrentManager {
-  async add(magnetURI: string): Promise<TorrentStatus> {
+  constructor() {
+    // Listen for metadata on ALL torrents at the client level.
+    // When any torrent becomes ready, send the metadata webhook.
+    engine.onTorrentReady((torrent) => {
+      logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent metadata ready')
+      this.notifyMetadataReady(torrent).catch((err) => {
+        logger.warn({ err, infoHash: torrent.infoHash }, 'metadata webhook failed')
+      })
+    })
+  }
+
+  /**
+   * Add a torrent and return immediately.
+   * If the torrent is already ready, returns full status with files.
+   * Otherwise returns a minimal status — the metadata webhook fires later.
+   */
+  add(magnetURI: string): TorrentStatus {
     if (!MAGNET_RE.test(magnetURI)) {
       throw new Error('invalid magnet uri')
     }
@@ -21,13 +37,31 @@ export class TorrentManager {
       throw new Error(`max torrents reached (${config.maxTorrents})`)
     }
 
-    const torrent = await engine.add(magnetURI)
-    logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent ready')
+    const torrent = engine.add(magnetURI)
 
-    this.wireEvents(torrent)
-    await this.notifyMetadataReady(torrent)
+    if (torrent.ready && torrent.infoHash) {
+      logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent already ready')
+      return this.toStatus(torrent)
+    }
 
-    return this.toStatus(torrent)
+    // Not ready yet — extract infoHash from magnet URI for immediate response
+    const m = magnetURI.match(/urn:btih:([a-fA-F0-9]{40})/)
+    const infoHash = m ? m[1].toLowerCase() : ''
+
+    logger.info({ infoHash }, 'torrent added, waiting for metadata from swarm')
+
+    return {
+      infoHash,
+      name: '',
+      ready: false,
+      progress: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      peers: 0,
+      length: 0,
+      downloaded: 0,
+      files: [],
+    }
   }
 
   get(infoHash: string): TorrentStatus {
@@ -41,7 +75,9 @@ export class TorrentManager {
   }
 
   list(): TorrentStatus[] {
-    return engine.list().map((t) => this.toStatus(t))
+    return engine.list()
+      .filter((t) => t?.infoHash)
+      .map((t) => this.toStatus(t))
   }
 
   setPriority(infoHash: string, fileIndex: number, priority: 0 | 1 | 2): void {
@@ -64,6 +100,7 @@ export class TorrentManager {
     if (progressTimer) return
     progressTimer = setInterval(() => {
       for (const t of engine.list()) {
+        if (!t?.infoHash) continue
         const payload = JSON.stringify({
           infoHash: t.infoHash,
           progress: t.progress,
@@ -85,15 +122,6 @@ export class TorrentManager {
     }
   }
 
-  private wireEvents(torrent: WTTorrent): void {
-    torrent.on('error', (err) => {
-      logger.error({ err, infoHash: torrent.infoHash }, 'torrent error')
-    })
-    torrent.on('done', () => {
-      logger.info({ infoHash: torrent.infoHash }, 'torrent download complete — seeding')
-    })
-  }
-
   private async notifyMetadataReady(torrent: WTTorrent): Promise<void> {
     try {
       const files = analyzeFiles(torrent)
@@ -107,6 +135,7 @@ export class TorrentManager {
             : undefined,
         },
       )
+      logger.info({ infoHash: torrent.infoHash }, 'metadata webhook sent')
     } catch (err) {
       logger.warn({ err, infoHash: torrent.infoHash }, 'metadata webhook failed (non-fatal)')
     }
