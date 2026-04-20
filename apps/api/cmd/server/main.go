@@ -79,7 +79,7 @@ func main() {
 	libraryRepo := repository.NewLibraryRepository(pool)
 	favoritesRepo := repository.NewFavoritesRepository(pool)
 	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
-	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, engineClient)
+	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, libraryRepo, engineClient)
 	readerSvc := service.NewReaderService(sessionRepo, fileRepo)
 	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
 	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)

@@ -32,6 +32,10 @@ type LibraryRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*domain.LibraryItem, error)
 	ListByUser(ctx context.Context, userID uuid.UUID, filter LibraryListFilter) ([]LibraryItemWithMeta, error)
 	Delete(ctx context.Context, id uuid.UUID) error
+	// UpdateTitleBySession refreshes the display title for every library row
+	// pointing at this session. Used when metadata arrives and we finally know
+	// the torrent's real name (initial inserts use the infoHash as placeholder).
+	UpdateTitleBySession(ctx context.Context, sessionID uuid.UUID, title string) error
 }
 
 type FavoritesRepository interface {

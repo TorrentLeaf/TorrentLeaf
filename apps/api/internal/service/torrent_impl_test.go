@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/seuuser/torrentleaf/api/internal/repository"
 )
 
 // ─── In-memory repo fakes ─────────────────────────────────────────────────────
@@ -205,8 +206,9 @@ const validMagnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef0123456
 func newTestTorrentSvc() (TorrentService, *fakeTorrentRepo, *fakeFileRepo, *fakeEngine) {
 	sr := newFakeTorrentRepo()
 	fr := newFakeFileRepo()
+	lr := newFakeLibraryRepo()
 	e := &fakeEngine{}
-	return NewTorrentService(sr, fr, e), sr, fr, e
+	return NewTorrentService(sr, fr, lr, e), sr, fr, e
 }
 
 func TestAddRejectsInvalidMagnet(t *testing.T) {
@@ -282,6 +284,36 @@ func TestAddRollsBackOnEngineFailure(t *testing.T) {
 	}
 	if _, err := sr.GetByInfoHash(context.Background(), "0123456789abcdef0123456789abcdef01234567"); err == nil {
 		t.Fatal("session should have been rolled back")
+	}
+}
+
+func TestAddAutoShelvesToLibrary(t *testing.T) {
+	sr := newFakeTorrentRepo()
+	fr := newFakeFileRepo()
+	lr := newFakeLibraryRepo()
+	svc := NewTorrentService(sr, fr, lr, &fakeEngine{})
+	userID := uuid.New()
+
+	session, err := svc.Add(context.Background(), userID, validMagnet)
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	items, _ := lr.ListByUser(context.Background(), userID, repository.LibraryListFilter{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 library item, got %d", len(items))
+	}
+	if items[0].Item.SessionID != session.ID {
+		t.Errorf("library item points to wrong session")
+	}
+	if items[0].Item.Title != session.InfoHash {
+		t.Errorf("placeholder title should be infoHash, got %q", items[0].Item.Title)
+	}
+
+	_ = svc.ApplyMetadata(context.Background(), session.InfoHash, "Real Name", 1024, nil)
+
+	items, _ = lr.ListByUser(context.Background(), userID, repository.LibraryListFilter{})
+	if items[0].Item.Title != "Real Name" {
+		t.Errorf("title should update to real name after metadata, got %q", items[0].Item.Title)
 	}
 }
 

@@ -113,6 +113,14 @@ func (r *libraryRepo) ListByUser(ctx context.Context, userID uuid.UUID, filter L
 	return out, rows.Err()
 }
 
+func (r *libraryRepo) UpdateTitleBySession(ctx context.Context, sessionID uuid.UUID, title string) error {
+	const q = `UPDATE library_items SET title = $2 WHERE session_id = $1`
+	if _, err := r.pool.Exec(ctx, q, sessionID, title); err != nil {
+		return fmt.Errorf("update library title: %w", err)
+	}
+	return nil
+}
+
 func (r *libraryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	const q = `DELETE FROM library_items WHERE id = $1`
 	tag, err := r.pool.Exec(ctx, q, id)

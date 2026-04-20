@@ -76,6 +76,17 @@ func (r *fakeLibraryRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *fakeLibraryRepo) UpdateTitleBySession(_ context.Context, sessionID uuid.UUID, title string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.items {
+		if item.SessionID == sessionID {
+			item.Title = title
+		}
+	}
+	return nil
+}
+
 // ─── fake favorites repo ────────────────────────────────────────────────────
 
 type fakeFavoritesRepo struct {

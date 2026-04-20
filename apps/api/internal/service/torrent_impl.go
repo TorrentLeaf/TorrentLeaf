@@ -18,15 +18,17 @@ var magnetRE = regexp.MustCompile(`^magnet:\?xt=urn:btih:([a-fA-F0-9]{40})`)
 type torrentService struct {
 	sessions repository.TorrentRepository
 	files    repository.TorrentFileRepository
+	library  repository.LibraryRepository
 	engine   EngineClient
 }
 
 func NewTorrentService(
 	sessions repository.TorrentRepository,
 	files repository.TorrentFileRepository,
+	library repository.LibraryRepository,
 	engine EngineClient,
 ) TorrentService {
-	return &torrentService{sessions: sessions, files: files, engine: engine}
+	return &torrentService{sessions: sessions, files: files, library: library, engine: engine}
 }
 
 func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error) {
@@ -64,6 +66,20 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	if _, err := s.engine.Add(ctx, magnetURI); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
 		return nil, domain.NewError(domain.ErrInternal, fmt.Sprintf("engine error: %v", err), err)
+	}
+
+	// Auto-shelf: create a library row with the infoHash as placeholder title.
+	// The real name lands via ApplyMetadata once the swarm delivers metadata.
+	// Conflicts (user re-added the same torrent) are swallowed — idempotency.
+	if _, err := s.library.Create(ctx, domain.LibraryItem{
+		UserID:    userID,
+		SessionID: session.ID,
+		Title:     session.InfoHash,
+		Type:      domain.LibraryTypeOther,
+	}); err != nil {
+		if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
+			return nil, err
+		}
 	}
 
 	return session, nil
@@ -146,7 +162,15 @@ func (s *torrentService) ApplyMetadata(
 	if err := s.files.CreateBatch(ctx, domainFiles); err != nil {
 		return err
 	}
-	return s.sessions.UpdateMetadata(ctx, infoHash, name, totalSize)
+	if err := s.sessions.UpdateMetadata(ctx, infoHash, name, totalSize); err != nil {
+		return err
+	}
+	if name != "" {
+		if err := s.library.UpdateTitleBySession(ctx, session.ID, name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func normalizeFileType(t string) domain.FileType {
