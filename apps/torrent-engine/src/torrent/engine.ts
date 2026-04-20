@@ -29,7 +29,6 @@ export type WTFile = {
 
 type WTClient = {
   add(uri: string, opts: Record<string, unknown>): WTTorrent | null
-  get(id: string): WTTorrent | undefined
   remove(id: string, cb?: (err?: Error) => void): void
   on(event: string, cb: (...args: unknown[]) => void): void
   torrents: WTTorrent[]
@@ -44,6 +43,8 @@ class TorrentEngine {
       maxConns: config.maxConnsPerTorrent,
       uploadLimit: -1,
       downloadLimit: -1,
+      torrentPort: config.torrentPort,
+      dhtPort: config.dhtPort,
     }) as unknown as WTClient
 
     this.client.on('error', (err) => {
@@ -65,7 +66,6 @@ class TorrentEngine {
    * The caller should listen for the 'ready' event separately if needed.
    */
   add(magnetURI: string): WTTorrent {
-    // Check if already in the client
     const existing = this.findByMagnet(magnetURI)
     if (existing) return existing
 
@@ -76,7 +76,6 @@ class TorrentEngine {
         maxConns: config.maxConnsPerTorrent,
       })
     } catch (err) {
-      // "Cannot add duplicate torrent" — find it in the list
       const found = this.findByMagnet(magnetURI)
       if (found) return found
       throw err
@@ -86,7 +85,10 @@ class TorrentEngine {
       throw new Error('webtorrent client.add() returned null')
     }
 
-    logger.info({ ready: torrent.ready, infoHash: torrent.infoHash ?? '(pending)' }, 'torrent added to client')
+    logger.info(
+      { ready: torrent.ready, infoHash: torrent.infoHash ?? '(pending)' },
+      'torrent added to client',
+    )
     return torrent
   }
 
@@ -99,7 +101,8 @@ class TorrentEngine {
   }
 
   get(infoHash: string): WTTorrent | undefined {
-    return this.client.get(infoHash) ?? this.client.torrents.find((t) => t.infoHash === infoHash)
+    // webtorrent 2.x made client.get() async; we only need synchronous lookup by infoHash.
+    return this.client.torrents.find((t) => t.infoHash === infoHash)
   }
 
   remove(infoHash: string): Promise<void> {
@@ -120,8 +123,7 @@ class TorrentEngine {
     const m = magnetURI.match(/urn:btih:([a-fA-F0-9]{40})/)
     if (!m) return undefined
     const hash = m[1].toLowerCase()
-    return this.client.get(hash)
-      ?? this.client.torrents.find((t) => t.infoHash === hash)
+    return this.client.torrents.find((t) => t.infoHash === hash)
   }
 }
 

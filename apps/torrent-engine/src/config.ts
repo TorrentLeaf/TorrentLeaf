@@ -11,6 +11,8 @@ export const config = {
   maxTorrents: Number(process.env.MAX_TORRENTS ?? 50),
   maxDiskGB: Number(process.env.MAX_DISK_GB ?? 20),
   maxConnsPerTorrent: Number(process.env.MAX_CONNS_PER_TORRENT ?? 55),
+  torrentPort: Number(process.env.TORRENT_PORT ?? 6881),
+  dhtPort: Number(process.env.DHT_PORT ?? 6882),
 } as const
 
 export const isProduction = config.env === 'production'

@@ -97,10 +97,18 @@ services:
       MAX_DISK_GB: "20"
       API_WEBHOOK_SECRET: dev-webhook-secret-change-in-prod
       LOG_LEVEL: debug
+      DEBUG: "webtorrent:*,bittorrent-tracker,bittorrent-dht"
     volumes:
       - torrent_data:/data/torrents
+      - ./apps/torrent-engine/src:/app/src
+      - ./apps/torrent-engine/tsconfig.json:/app/tsconfig.json
     ports:
       - "9090:9000"
+      # BitTorrent peer wire (TCP) + uTP (UDP) on 6881; DHT (UDP) on 6882.
+      # Exposing these lets peers reach us for incoming connections and DHT queries.
+      - "6881:6881/tcp"
+      - "6881:6881/udp"
+      - "6882:6882/udp"
     networks: [backend-tier, db-tier]
     depends_on:
       redis:
