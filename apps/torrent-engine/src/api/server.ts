@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { config, isProduction } from '../config.js'
 import { registerTorrentRoutes } from './routes/torrents.js'
 import { registerStreamRoutes } from './routes/stream.js'
+import { registerArchiveRoutes } from './routes/archive.js'
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -23,6 +24,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await registerTorrentRoutes(app)
   await registerStreamRoutes(app)
+  await registerArchiveRoutes(app)
 
   app.setErrorHandler((err, _req, reply) => {
     app.log.error({ err }, 'request error')
