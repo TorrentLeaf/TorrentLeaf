@@ -32,10 +32,12 @@ export function TorrentCard({ card, onToggleFavorite }: TorrentCardProps) {
       ? Math.round((card.currentPage / card.totalPages) * 100)
       : 0
 
-  const readLink =
-    card.type === 'manga'
-      ? `/read/manga/${card.sessionId}`
-      : `/read/pdf/${card.id}`
+  // Library card click lands on the torrent detail page, where the user picks
+  // a specific file to read. The card itself doesn't know the underlying file
+  // types (a session can mix PDFs, CBZs and loose images), so routing directly
+  // to a reader was brittle — e.g. a CBZ session with type='other' used to
+  // route to the PDF reader and render "Missing PDF".
+  const readLink = `/torrents/${card.sessionId}`
 
   return (
     <div className="group relative flex flex-col overflow-hidden rounded-xl border border-[hsl(var(--border))]/50 bg-[hsl(var(--surface))] transition-all duration-200 hover:border-[hsl(var(--accent))]/40 hover:shadow-sm">

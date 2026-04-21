@@ -1,13 +1,29 @@
 'use client'
 
+import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
+import { BookOpen, FileText } from 'lucide-react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 import { api } from '@/lib/api'
-import type { TorrentSession } from '@/lib/torrents'
+import type { TorrentSession, TorrentFile } from '@/lib/torrents'
 import { useTorrentProgress } from '@/hooks/use-torrent-progress'
+
+function readerLinkFor(sessionId: string, file: TorrentFile): string | null {
+  if (file.fileType === 'cbz' || file.fileType === 'image') {
+    return `/read/manga/${sessionId}?fileId=${encodeURIComponent(file.id)}`
+  }
+  if (file.fileType === 'pdf') {
+    return `/read/pdf/${encodeURIComponent(file.id)}`
+  }
+  if (file.fileType === 'epub') {
+    return `/read/epub/${sessionId}?fileId=${encodeURIComponent(file.id)}`
+  }
+  return null
+}
 
 function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '0 B'
@@ -84,14 +100,30 @@ export default function TorrentDetailPage() {
           </CardHeader>
           <CardContent>
             <ul className="divide-y divide-border">
-              {session.files.map((f) => (
-                <li key={f.id} className="flex items-center justify-between py-2 text-sm">
-                  <span className="truncate pr-4">{f.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {f.fileType} · {formatBytes(f.length)}
-                  </span>
-                </li>
-              ))}
+              {session.files.map((f) => {
+                const href = readerLinkFor(session.id, f)
+                const Icon = f.fileType === 'pdf' ? FileText : BookOpen
+                return (
+                  <li key={f.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate">{f.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {f.fileType} · {formatBytes(f.length)}
+                      </p>
+                    </div>
+                    {href && (
+                      <Button asChild size="sm" variant="secondary">
+                        {/* Dynamic href, so we opt out of Next's typed-routes
+                            inference — the route shape is checked at runtime. */}
+                        <Link href={href as never}>
+                          <Icon className="mr-1 h-4 w-4" />
+                          Read
+                        </Link>
+                      </Button>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </CardContent>
         </Card>
