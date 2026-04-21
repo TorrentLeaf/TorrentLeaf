@@ -11,6 +11,9 @@ const (
 	ErrConflict     ErrCode = "conflict"
 	ErrInvalidInput ErrCode = "invalid_input"
 	ErrInternal     ErrCode = "internal"
+	// ErrUnavailable: resource exists but is temporarily not usable; the
+	// client should back off and retry (maps to HTTP 503).
+	ErrUnavailable ErrCode = "unavailable"
 )
 
 type Error struct {

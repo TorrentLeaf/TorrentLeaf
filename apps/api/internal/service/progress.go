@@ -9,9 +9,20 @@ import (
 	"github.com/seuuser/torrentleaf/api/internal/repository"
 )
 
+// UpdateProgress groups the fields a caller can send when updating reading
+// progress. EPUB callers set Location (a CFI); image/pdf callers set the
+// numeric CurrentPage. Leaving Location empty preserves any previously
+// stored value, so a paginated update won't wipe a CFI from an EPUB session.
+type UpdateProgress struct {
+	CurrentPage int
+	TotalPages  int
+	Mode        domain.ReadingMode
+	Location    string
+}
+
 type ProgressService interface {
 	Get(ctx context.Context, userID, fileID uuid.UUID) (*domain.ReadingProgress, error)
-	Update(ctx context.Context, userID, fileID uuid.UUID, currentPage, totalPages int, mode domain.ReadingMode) (*domain.ReadingProgress, error)
+	Update(ctx context.Context, userID, fileID uuid.UUID, in UpdateProgress) (*domain.ReadingProgress, error)
 }
 
 type progressService struct {
@@ -38,22 +49,21 @@ func (s *progressService) Get(ctx context.Context, userID, fileID uuid.UUID) (*d
 func (s *progressService) Update(
 	ctx context.Context,
 	userID, fileID uuid.UUID,
-	currentPage, totalPages int,
-	mode domain.ReadingMode,
+	in UpdateProgress,
 ) (*domain.ReadingProgress, error) {
-	if currentPage < 0 {
+	if in.CurrentPage < 0 {
 		return nil, domain.NewError(domain.ErrInvalidInput, "currentPage must be non-negative", nil)
 	}
-	if totalPages > 0 && currentPage > totalPages {
+	if in.TotalPages > 0 && in.CurrentPage > in.TotalPages {
 		return nil, domain.NewError(domain.ErrInvalidInput, "currentPage cannot exceed totalPages", nil)
 	}
-	switch mode {
+	switch in.Mode {
 	case "", domain.ReadingModePaginated, domain.ReadingModeWebtoon, domain.ReadingModeDoublePage:
 	default:
 		return nil, domain.NewError(domain.ErrInvalidInput, "invalid reading mode", nil)
 	}
-	if mode == "" {
-		mode = domain.ReadingModePaginated
+	if in.Mode == "" {
+		in.Mode = domain.ReadingModePaginated
 	}
 	if err := s.checkOwnership(ctx, userID, fileID); err != nil {
 		return nil, err
@@ -61,9 +71,10 @@ func (s *progressService) Update(
 	return s.progress.Upsert(ctx, domain.ReadingProgress{
 		UserID:      userID,
 		FileID:      fileID,
-		CurrentPage: currentPage,
-		TotalPages:  totalPages,
-		ReadingMode: mode,
+		CurrentPage: in.CurrentPage,
+		TotalPages:  in.TotalPages,
+		ReadingMode: in.Mode,
+		Location:    in.Location,
 	})
 }
 

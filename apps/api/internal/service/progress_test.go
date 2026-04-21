@@ -84,7 +84,7 @@ func TestProgressUpdateUpsertsAndValidates(t *testing.T) {
 	svc, _, _, userID, fileID := newTestProgressSvc(t)
 	ctx := context.Background()
 
-	p, err := svc.Update(ctx, userID, fileID, 5, 30, domain.ReadingModeWebtoon)
+	p, err := svc.Update(ctx, userID, fileID, UpdateProgress{CurrentPage: 5, TotalPages: 30, Mode: domain.ReadingModeWebtoon})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestProgressUpdateUpsertsAndValidates(t *testing.T) {
 	}
 
 	// Idempotent update: next call overwrites currentPage, keeps totalPages.
-	p2, err := svc.Update(ctx, userID, fileID, 6, 0, domain.ReadingModeWebtoon)
+	p2, err := svc.Update(ctx, userID, fileID, UpdateProgress{CurrentPage: 6, Mode: domain.ReadingModeWebtoon})
 	if err != nil {
 		t.Fatalf("second update: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestProgressUpdateRejectsInvalidInput(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := svc.Update(ctx, userID, fileID, c.page, c.total, c.mode)
+			_, err := svc.Update(ctx, userID, fileID, UpdateProgress{CurrentPage: c.page, TotalPages: c.total, Mode: c.mode})
 			var de *domain.Error
 			if !errors.As(err, &de) || de.Code != domain.ErrInvalidInput {
 				t.Fatalf("expected ErrInvalidInput, got %v", err)
@@ -134,7 +134,7 @@ func TestProgressEnforcesOwnership(t *testing.T) {
 	ctx := context.Background()
 	stranger := uuid.New()
 
-	_, err := svc.Update(ctx, stranger, fileID, 0, 10, domain.ReadingModePaginated)
+	_, err := svc.Update(ctx, stranger, fileID, UpdateProgress{CurrentPage: 0, TotalPages: 10, Mode: domain.ReadingModePaginated})
 	var de *domain.Error
 	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
 		t.Fatalf("stranger should get ErrNotFound, got %v", err)
@@ -144,7 +144,7 @@ func TestProgressEnforcesOwnership(t *testing.T) {
 func TestProgressDefaultMode(t *testing.T) {
 	svc, _, _, userID, fileID := newTestProgressSvc(t)
 	ctx := context.Background()
-	p, err := svc.Update(ctx, userID, fileID, 0, 10, "")
+	p, err := svc.Update(ctx, userID, fileID, UpdateProgress{TotalPages: 10})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}

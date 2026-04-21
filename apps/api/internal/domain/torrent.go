@@ -72,7 +72,10 @@ type ReadingProgress struct {
 	CurrentPage int
 	TotalPages  int
 	ReadingMode ReadingMode
-	LastReadAt  time.Time
+	// Location is a free-form position marker used by readers that don't
+	// page-index naturally (EPUB uses a CFI string). Empty for image/pdf.
+	Location   string
+	LastReadAt time.Time
 }
 
 type LibraryItemType string

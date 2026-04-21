@@ -26,6 +26,7 @@ type progressDTO struct {
 	CurrentPage int    `json:"currentPage"`
 	TotalPages  int    `json:"totalPages"`
 	ReadingMode string `json:"readingMode"`
+	Location    string `json:"location,omitempty"`
 	LastReadAt  string `json:"lastReadAt"`
 }
 
@@ -33,6 +34,7 @@ type updateProgressRequest struct {
 	CurrentPage int    `json:"currentPage"`
 	TotalPages  int    `json:"totalPages"`
 	ReadingMode string `json:"readingMode"`
+	Location    string `json:"location"`
 }
 
 func toProgressDTO(p *domain.ReadingProgress) progressDTO {
@@ -41,6 +43,7 @@ func toProgressDTO(p *domain.ReadingProgress) progressDTO {
 		CurrentPage: p.CurrentPage,
 		TotalPages:  p.TotalPages,
 		ReadingMode: string(p.ReadingMode),
+		Location:    p.Location,
 		LastReadAt:  p.LastReadAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
@@ -83,7 +86,12 @@ func (h *ProgressHandler) Update(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 	}
-	p, err := h.svc.Update(c.Context(), userID, fileID, req.CurrentPage, req.TotalPages, domain.ReadingMode(req.ReadingMode))
+	p, err := h.svc.Update(c.Context(), userID, fileID, service.UpdateProgress{
+		CurrentPage: req.CurrentPage,
+		TotalPages:  req.TotalPages,
+		Mode:        domain.ReadingMode(req.ReadingMode),
+		Location:    req.Location,
+	})
 	if err != nil {
 		return mapTorrentError(err)
 	}
