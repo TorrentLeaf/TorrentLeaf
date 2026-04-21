@@ -80,7 +80,7 @@ func main() {
 	favoritesRepo := repository.NewFavoritesRepository(pool)
 	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
 	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, libraryRepo, engineClient)
-	readerSvc := service.NewReaderService(sessionRepo, fileRepo)
+	readerSvc := service.NewReaderService(sessionRepo, fileRepo, engineClient)
 	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
 	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)
 	adminSvc := service.NewAdminService(sessionRepo, engineClient)
@@ -163,7 +163,12 @@ func registerRoutes(app *fiber.App, d deps) {
 	api.Post("/auth/refresh", auth.Refresh)
 	api.Post("/auth/logout", auth.Logout)
 
-	// WebSocket — uses WS-specific auth so browsers can pass ?token=.
+	// WebSocket + stream routes use RequireAuthWS (token via ?token=).
+	// IMPORTANT: must be registered BEFORE the `protected := api.Group("", RequireAuth)`
+	// line below — Fiber's Group(prefix, handler) with an empty prefix registers
+	// the handler as a Use() on the WHOLE api group, so ANY /api/v1/* route
+	// declared afterwards inherits RequireAuth and the RequireAuthWS passed
+	// here becomes dead code.
 	ws := handler.NewTorrentWSHandler(d.log, d.torrentSvc, d.redis)
 	api.Get("/torrents/:id/ws",
 		middleware.RequireAuthWS(d.authSvc),
@@ -171,7 +176,11 @@ func registerRoutes(app *fiber.App, d deps) {
 		websocket.New(ws.Stream),
 	)
 
-	// All routes below require a valid access token.
+	reader := handler.NewReaderHandler(d.log, d.readerSvc, d.engineURL)
+	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
+	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
+
+	// All routes below require a valid access token via Authorization header.
 	protected := api.Group("", middleware.RequireAuth(d.authSvc))
 
 	torrents := handler.NewTorrentHandler(d.log, d.torrentSvc)
@@ -181,13 +190,7 @@ func registerRoutes(app *fiber.App, d deps) {
 	protected.Delete("/torrents/:id", torrents.Delete)
 	protected.Post("/torrents/:id/priority", torrents.SetPriority)
 
-	reader := handler.NewReaderHandler(d.log, d.readerSvc, d.engineURL)
 	protected.Get("/reader/:id/pages", reader.GetPages)
-
-	// Stream routes use RequireAuthWS so <img>/<video> tags can pass ?token=
-	// on the URL (browsers cannot attach Authorization headers to these).
-	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
-	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
 
 	library := handler.NewLibraryHandler(d.log, d.librarySvc)
 	protected.Get("/library", library.List)

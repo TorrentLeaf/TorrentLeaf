@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -176,6 +177,8 @@ type fakeEngine struct {
 		Hash        string
 		Idx, Prio int
 	}
+	archiveEntries map[string][]EngineArchiveEntry // keyed by "hash:fileIdx"
+	archiveErr     error
 }
 
 func (e *fakeEngine) Add(_ context.Context, magnet string) (EngineTorrentStatus, error) {
@@ -197,6 +200,16 @@ func (e *fakeEngine) SetPriority(_ context.Context, hash string, idx, prio int) 
 		Idx, Prio int
 	}{hash, idx, prio})
 	return nil
+}
+
+func (e *fakeEngine) ListArchiveEntries(_ context.Context, hash string, fileIdx int) ([]EngineArchiveEntry, error) {
+	if e.archiveErr != nil {
+		return nil, e.archiveErr
+	}
+	if e.archiveEntries == nil {
+		return nil, nil
+	}
+	return e.archiveEntries[hash+":"+strconv.Itoa(fileIdx)], nil
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

@@ -177,6 +177,8 @@ func mapTorrentError(err error) error {
 		return fiber.NewError(fiber.StatusNotFound, de.Message)
 	case domain.ErrConflict:
 		return fiber.NewError(fiber.StatusConflict, de.Message)
+	case domain.ErrUnavailable:
+		return fiber.NewError(fiber.StatusServiceUnavailable, de.Message)
 	case domain.ErrForbidden:
 		return fiber.NewError(fiber.StatusForbidden, de.Message)
 	case domain.ErrUnauthorized:

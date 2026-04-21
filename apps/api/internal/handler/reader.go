@@ -1,14 +1,17 @@
 package handler
 
 import (
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
+	"github.com/seuuser/torrentleaf/api/internal/domain"
 	"github.com/seuuser/torrentleaf/api/internal/middleware"
 	"github.com/seuuser/torrentleaf/api/internal/service"
 )
@@ -30,11 +33,12 @@ func NewReaderHandler(log zerolog.Logger, svc service.ReaderService, engineURL s
 }
 
 type pageDTO struct {
-	Index    int    `json:"index"`
-	FileID   string `json:"fileId"`
-	Name     string `json:"name"`
-	MimeType string `json:"mimeType"`
-	Length   int64  `json:"length"`
+	Index      int    `json:"index"`
+	FileID     string `json:"fileId"`
+	EntryIndex *int   `json:"entryIndex,omitempty"`
+	Name       string `json:"name"`
+	MimeType   string `json:"mimeType"`
+	Length     int64  `json:"length"`
 }
 
 // GetPages is mounted at GET /api/v1/reader/:id/pages where :id is a
@@ -48,26 +52,33 @@ func (h *ReaderHandler) GetPages(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid id")
 	}
-	pages, err := h.svc.ListPages(c.Context(), userID, sessionID)
+	var onlyFileID uuid.UUID
+	if raw := c.Query("fileId"); raw != "" {
+		onlyFileID, err = uuid.Parse(raw)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+		}
+	}
+	pages, err := h.svc.ListPages(c.Context(), userID, sessionID, onlyFileID)
 	if err != nil {
 		return mapTorrentError(err)
 	}
 	out := make([]pageDTO, 0, len(pages))
 	for _, p := range pages {
 		out = append(out, pageDTO{
-			Index:    p.Index,
-			FileID:   p.FileID.String(),
-			Name:     p.Name,
-			MimeType: p.MimeType,
-			Length:   p.Length,
+			Index:      p.Index,
+			FileID:     p.FileID.String(),
+			EntryIndex: p.EntryIndex,
+			Name:       p.Name,
+			MimeType:   p.MimeType,
+			Length:     p.Length,
 		})
 	}
 	return c.JSON(out)
 }
 
-// StreamFile proxies the image bytes from the torrent-engine. Forwards the
-// Range header so browsers can seek within large images (rare for manga, but
-// important for CBZ extraction once supported).
+// StreamFile proxies the full file bytes from the torrent-engine. Forwards
+// the Range header so browsers/PDF.js can seek.
 // Mounted at GET /api/v1/stream/:fileId
 func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	userID, ok := middleware.UserID(c)
@@ -78,19 +89,62 @@ func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
 	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	url := fmt.Sprintf("%s/engine/stream/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
+	return h.proxyUpstream(c, url, target.MimeType, true)
+}
 
-	infoHash, fileIndex, mimeType, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+// StreamPage is mounted at GET /api/v1/stream/:fileId/:page.
+//
+// For CBZ files, :page is the zero-based index of an archive entry and we
+// proxy to the engine's /engine/archive endpoint. For other file types the
+// page segment is ignored and we fall back to the whole-file stream.
+func (h *ReaderHandler) StreamPage(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fileID, err := uuid.Parse(c.Params("fileId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
 	if err != nil {
 		return mapTorrentError(err)
 	}
 
-	url := h.engineURL + "/engine/stream/" + infoHash + "/" + itoa(fileIndex)
+	if target.FileType != domain.FileTypeCBZ {
+		// Legacy behavior: non-archive files ignore :page and stream whole.
+		url := fmt.Sprintf("%s/engine/stream/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
+		return h.proxyUpstream(c, url, target.MimeType, true)
+	}
+
+	entryIdx, err := strconv.Atoi(c.Params("page"))
+	if err != nil || entryIdx < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid page index")
+	}
+	url := fmt.Sprintf("%s/engine/archive/%s/%d/entry/%d",
+		h.engineURL, target.InfoHash, target.FileIndex, entryIdx)
+	// Archive entries are decompressed on the engine side; Range is not
+	// supported there (yet), so forward without it.
+	return h.proxyUpstream(c, url, "", false)
+}
+
+// proxyUpstream performs the HTTP proxy to the engine, forwarding the body
+// and relevant headers. If forwardRange is true, the client's Range header
+// is copied upstream.
+func (h *ReaderHandler) proxyUpstream(c *fiber.Ctx, url, fallbackMime string, forwardRange bool) error {
 	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, url, nil)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "build upstream request")
 	}
-	if r := c.Get("Range"); r != "" {
-		req.Header.Set("Range", r)
+	if forwardRange {
+		if r := c.Get("Range"); r != "" {
+			req.Header.Set("Range", r)
+		}
 	}
 
 	resp, err := h.http.Do(req)
@@ -100,47 +154,16 @@ func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	}
 	defer resp.Body.Close()
 
-	// Forward status + relevant headers.
 	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
 		if v := resp.Header.Get(k); v != "" {
 			c.Set(k, v)
 		}
 	}
-	if mimeType != "" && c.Get(fiber.HeaderContentType) == "" {
-		c.Set(fiber.HeaderContentType, mimeType)
+	if fallbackMime != "" && c.Get(fiber.HeaderContentType) == "" {
+		c.Set(fiber.HeaderContentType, fallbackMime)
 	}
 	c.Status(resp.StatusCode)
 
 	_, err = io.Copy(c.Response().BodyWriter(), resp.Body)
 	return err
-}
-
-// StreamPage is the legacy route: GET /api/v1/stream/:fileId/:page.
-// Kept for archive-type readers that address pages within a file; for images
-// it just delegates to StreamFile and ignores :page.
-func (h *ReaderHandler) StreamPage(c *fiber.Ctx) error {
-	return h.StreamFile(c)
-}
-
-func itoa(n int) string {
-	// tiny allocation-free itoa for positive ints
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
 }
