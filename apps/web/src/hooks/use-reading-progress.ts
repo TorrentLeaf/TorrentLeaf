@@ -10,6 +10,8 @@ interface SavePayload {
   currentPage: number
   totalPages?: number
   readingMode?: ReadingMode
+  /** Opaque position marker — EPUB uses a CFI. */
+  location?: string
 }
 
 /**

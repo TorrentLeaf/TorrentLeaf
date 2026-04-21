@@ -8,6 +8,8 @@ export type ReadingMode = 'paginated' | 'webtoon' | 'double-page'
 export interface ReaderPage {
   index: number
   fileId: string
+  /** Present when the page is an entry inside a CBZ archive. */
+  entryIndex?: number
   name: string
   mimeType: string
   length: number
@@ -18,14 +20,23 @@ export interface ReadingProgress {
   currentPage: number
   totalPages: number
   readingMode: ReadingMode
+  /** EPUB CFI or other free-form position marker. Empty for image/pdf. */
+  location?: string
   lastReadAt?: string
 }
 
-/** Absolute URL for an image page — used as <img src>. Axios isn't used here
+/** Absolute URL for a page — used as <img src>. Axios isn't used here
  *  because <img> fetches directly through the browser loader, which handles
  *  streaming, caching and Range requests itself. Auth is carried by the
- *  access token on the query string since <img> cannot set headers. */
-export function pageStreamURL(fileId: string): string {
+ *  access token on the query string since <img> cannot set headers.
+ *
+ *  When `entryIndex` is provided the URL targets a specific entry inside a
+ *  CBZ archive; otherwise it streams the whole file. */
+export function pageStreamURL(fileId: string, entryIndex?: number): string {
   const token = useAuthStore.getState().accessToken ?? ''
-  return `${API_BASE}/api/v1/stream/${fileId}?token=${encodeURIComponent(token)}`
+  const qs = `token=${encodeURIComponent(token)}`
+  if (entryIndex === undefined) {
+    return `${API_BASE}/api/v1/stream/${fileId}?${qs}`
+  }
+  return `${API_BASE}/api/v1/stream/${fileId}/${entryIndex}?${qs}`
 }

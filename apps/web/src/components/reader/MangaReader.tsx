@@ -15,21 +15,34 @@ import { PageImage } from './PageImage'
 
 export interface MangaReaderProps {
   sessionId: string
+  /** Scope the reader to a single file (e.g. one CBZ chapter). Optional. */
+  fileId?: string
 }
 
 const MODE_ORDER: ReadingMode[] = ['paginated', 'webtoon', 'double-page']
 
-export function MangaReader({ sessionId }: MangaReaderProps) {
+export function MangaReader({ sessionId, fileId }: MangaReaderProps) {
   const router = useRouter()
   const containerRef = useRef<HTMLDivElement>(null)
   const webtoonRef = useRef<HTMLDivElement>(null)
 
   const pagesQuery = useQuery<ReaderPage[]>({
-    queryKey: ['reader-pages', sessionId],
+    queryKey: ['reader-pages', sessionId, fileId ?? null],
     queryFn: async () => {
-      const { data } = await api.get<ReaderPage[]>(`/reader/${sessionId}/pages`)
+      const url = fileId
+        ? `/reader/${sessionId}/pages?fileId=${encodeURIComponent(fileId)}`
+        : `/reader/${sessionId}/pages`
+      const { data } = await api.get<ReaderPage[]>(url)
       return data
     },
+    // 503 = archive pieces still arriving from the swarm. Keep polling until
+    // the CBZ central directory is reachable.
+    retry: (failureCount, err) => {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 503) return failureCount < 20
+      return failureCount < 2
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
   })
   const pages = pagesQuery.data ?? []
   const totalPages = pages.length
@@ -148,6 +161,16 @@ export function MangaReader({ sessionId }: MangaReaderProps) {
     return <ReaderLoading />
   }
 
+  const lastStatus = (pagesQuery.error as { response?: { status?: number } } | null)?.response?.status
+
+  if (pagesQuery.isError && lastStatus === 503) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--background))] text-[hsl(var(--muted))]">
+        <p className="text-sm">Archive not ready yet — waiting for pieces from the swarm…</p>
+      </div>
+    )
+  }
+
   if (pagesQuery.isError || totalPages === 0) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--background))] text-[hsl(var(--muted))]">
@@ -216,8 +239,8 @@ export function MangaReader({ sessionId }: MangaReaderProps) {
           <div ref={webtoonRef} className="mx-auto max-w-3xl">
             {pages.map((p, i) => (
               <PageImage
-                key={p.fileId}
-                src={pageStreamURL(p.fileId)}
+                key={`${p.fileId}:${p.entryIndex ?? '*'}`}
+                src={pageStreamURL(p.fileId, p.entryIndex)}
                 page={i}
                 priority={i === currentPage}
               />
@@ -297,7 +320,7 @@ function PaginatedCanvas({
         {double && left && (
           <div className="max-h-[calc(100vh-6rem)] w-1/2">
             <PageImage
-              src={pageStreamURL(left.fileId)}
+              src={pageStreamURL(left.fileId, left.entryIndex)}
               page={currentPage - 1}
               priority
             />
@@ -310,7 +333,7 @@ function PaginatedCanvas({
             }
           >
             <PageImage
-              src={pageStreamURL(current.fileId)}
+              src={pageStreamURL(current.fileId, current.entryIndex)}
               page={currentPage}
               priority
             />

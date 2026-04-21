@@ -29,14 +29,14 @@ export function useMangaPreload(pages: ReaderPage[], currentPage: number) {
   useEffect(() => {
     targets.forEach((page) => {
       queryClient.prefetchQuery({
-        queryKey: ['page-preload', page.fileId],
+        queryKey: ['page-preload', page.fileId, page.entryIndex ?? null],
         staleTime: 10 * 60 * 1000,
         queryFn: () =>
           new Promise<true>((resolve, reject) => {
             const img = new Image()
             img.onload = () => resolve(true)
             img.onerror = () => reject(new Error('preload failed'))
-            img.src = pageStreamURL(page.fileId)
+            img.src = pageStreamURL(page.fileId, page.entryIndex)
           }),
       })
     })
