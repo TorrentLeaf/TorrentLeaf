@@ -273,10 +273,23 @@ param, since `<img>` and `<video>` tags cannot set headers.
 
 ### `GET /api/v1/reader/:id/pages`
 
-List the readable pages of a torrent session. Non-image files are filtered
-out and image files are sorted by filename using natural (numeric-aware)
-ordering, so `page-2.jpg` precedes `page-10.jpg`. Each page's `index` is
+List the readable pages of a torrent session. Behavior by file type:
+
+- **Loose images** (`.jpg/.png/.webp/…`): one page per file
+- **CBZ**: each internal image entry is expanded into a page carrying
+  `entryIndex`, pointing back to its parent `fileId`
+- **PDF/EPUB/others**: not materialized here — those readers address
+  positions internally
+
+Parent files are natural-sorted (`chapter-2.cbz` before `chapter-10.cbz`)
+before expansion, so CBZ chapters stay in order. Each page's `index` is
 reassigned to its post-sort position.
+
+**Query params**
+
+- `fileId` (optional, uuid) — scope pages to a single file (e.g. one CBZ
+  chapter). Useful for torrents with many CBZs to avoid flattening
+  everything into a single huge page list.
 
 **Response** — `200 OK`
 
@@ -285,14 +298,21 @@ reassigned to its post-sort position.
   {
     "index": 0,
     "fileId": "uuid",
-    "name": "page-001.jpg",
+    "entryIndex": 0,
+    "name": "p01.jpg",
     "mimeType": "image/jpeg",
-    "length": 284931
+    "length": 392047
   }
 ]
 ```
 
-`404 Not Found` if the session does not exist or belongs to another user.
+`entryIndex` is omitted for loose images.
+
+- `404 Not Found` if the session does not exist, belongs to another user,
+  or `fileId` isn't part of the session
+- `503 Service Unavailable` when a CBZ's central directory bytes haven't
+  arrived yet. Body: `{"error":"archive ... not ready yet, retry shortly"}`.
+  Client should retry with backoff.
 
 ### `GET /api/v1/stream/:fileId`
 
@@ -307,10 +327,24 @@ Auth: `Authorization: Bearer <jwt>` **or** `?token=<jwt>`.
 - `401 Unauthorized`
 - `404 Not Found`
 
-### `GET /api/v1/stream/:fileId/:page` (legacy)
+### `GET /api/v1/stream/:fileId/:page`
 
-Alias of `/stream/:fileId`. The `:page` segment is currently ignored —
-pagination is done by the browser's range loader, not the server.
+For **CBZ** files, `:page` is the zero-based index of an entry inside the
+archive. The API proxies to the engine's archive endpoint which returns the
+decompressed image bytes of that entry. Range requests are **not** supported
+for archive entries (the body comes buffered).
+
+For image/PDF/EPUB files, `:page` is ignored and the route behaves like
+`/stream/:fileId` (backward-compatible with earlier clients).
+
+Auth: `Authorization: Bearer <jwt>` **or** `?token=<jwt>`.
+
+- `200 OK` — full entry body, `Content-Type: image/...`, `Content-Length`
+  reflects the actual (decompressed) size
+- `401 Unauthorized`
+- `404 Not Found`
+- `503 Service Unavailable` — archive entry pieces not yet downloaded from
+  the swarm; retry
 
 > **PDF.js integration.** The web client opens `/stream/:fileId?token=…` as
 > the `url` of `pdfjs.getDocument(...)` with `disableStream: false` and a
@@ -406,15 +440,20 @@ first opens.
   "currentPage": 12,
   "totalPages": 30,
   "readingMode": "paginated" | "webtoon" | "double-page",
+  "location": "epubcfi(/6/12!/4/2/1:3)",
   "lastReadAt": "2026-04-15T00:00:00Z"
 }
 ```
+
+`location` is an opaque position marker used by readers that don't page-index
+naturally — EPUB uses a CFI string here. Omitted for image/PDF/CBZ sessions.
 
 ### `PUT /api/v1/progress/:fileId`
 
 Upsert progress. `totalPages` may be omitted or `0` on subsequent calls; the
 previously stored value is preserved via `COALESCE`. `readingMode` defaults
-to `paginated` when empty.
+to `paginated` when empty. `location` is also preserved when not sent, so a
+paginated update from one reader won't wipe the EPUB CFI stored by another.
 
 **Request**
 
@@ -422,7 +461,8 @@ to `paginated` when empty.
 {
   "currentPage": 12,
   "totalPages": 30,
-  "readingMode": "paginated"
+  "readingMode": "paginated",
+  "location": "epubcfi(/6/12!/4/2/1:3)"
 }
 ```
 
