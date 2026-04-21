@@ -83,3 +83,5 @@ minio-data/
 *.tmp
 *.temp
 HANDOFF.md
+TODO.md
+COMMANDS.md
