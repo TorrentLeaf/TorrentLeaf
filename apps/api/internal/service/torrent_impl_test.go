@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/repository"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/repository"
 )
 
 // ─── In-memory repo fakes ─────────────────────────────────────────────────────
@@ -389,6 +390,152 @@ func TestSetPriorityValidatesRange(t *testing.T) {
 		var de *domain.Error
 		if !errors.As(err, &de) || de.Code != domain.ErrInvalidInput {
 			t.Errorf("priority %d: expected ErrInvalidInput, got %v", p, err)
+		}
+	}
+}
+
+func TestSetPriorityForwardsToEngine(t *testing.T) {
+	svc, _, _, e := newTestTorrentSvc()
+	userID := uuid.New()
+	session, _ := svc.Add(context.Background(), userID, validMagnet)
+
+	if err := svc.SetPriority(context.Background(), userID, session.ID, 3, 2); err != nil {
+		t.Fatalf("set priority: %v", err)
+	}
+	if len(e.priorityCalls) != 1 {
+		t.Fatalf("expected 1 priority call, got %d", len(e.priorityCalls))
+	}
+	call := e.priorityCalls[0]
+	if call.Hash != session.InfoHash || call.Idx != 3 || call.Prio != 2 {
+		t.Errorf("unexpected call: %+v", call)
+	}
+}
+
+func TestSetPriorityRejectsForeignSession(t *testing.T) {
+	svc, _, _, _ := newTestTorrentSvc()
+	owner := uuid.New()
+	session, _ := svc.Add(context.Background(), owner, validMagnet)
+
+	err := svc.SetPriority(context.Background(), uuid.New(), session.ID, 0, 1)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound for foreign user, got %v", err)
+	}
+}
+
+func TestSetPriorityOnMissingSession(t *testing.T) {
+	svc, _, _, _ := newTestTorrentSvc()
+	err := svc.SetPriority(context.Background(), uuid.New(), uuid.New(), 0, 1)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestListReturnsOnlyCallerSessions(t *testing.T) {
+	svc, _, _, _ := newTestTorrentSvc()
+	owner := uuid.New()
+	other := uuid.New()
+
+	if _, err := svc.Add(context.Background(), owner, validMagnet); err != nil {
+		t.Fatalf("owner add: %v", err)
+	}
+	otherMagnet := "magnet:?xt=urn:btih:abababababababababababababababababababab"
+	if _, err := svc.Add(context.Background(), other, otherMagnet); err != nil {
+		t.Fatalf("other add: %v", err)
+	}
+
+	sessions, err := svc.List(context.Background(), owner)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session for owner, got %d", len(sessions))
+	}
+	if sessions[0].UserID != owner {
+		t.Errorf("list leaked cross-user session: %s", sessions[0].UserID)
+	}
+}
+
+func TestDeleteRemovesSessionAndCallsEngine(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	userID := uuid.New()
+	session, _ := svc.Add(context.Background(), userID, validMagnet)
+
+	if err := svc.Delete(context.Background(), userID, session.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := sr.GetByID(context.Background(), session.ID); err == nil {
+		t.Fatal("session should be removed")
+	}
+	if len(e.removeCalls) != 1 || e.removeCalls[0] != session.InfoHash {
+		t.Errorf("engine.Remove not called correctly: %+v", e.removeCalls)
+	}
+}
+
+func TestDeleteRejectsForeignSession(t *testing.T) {
+	svc, sr, _, _ := newTestTorrentSvc()
+	owner := uuid.New()
+	session, _ := svc.Add(context.Background(), owner, validMagnet)
+
+	err := svc.Delete(context.Background(), uuid.New(), session.ID)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound for foreign user, got %v", err)
+	}
+	// Still present for the owner.
+	if _, err := sr.GetByID(context.Background(), session.ID); err != nil {
+		t.Errorf("foreign delete should not have removed the session: %v", err)
+	}
+}
+
+func TestDeleteMissingSession(t *testing.T) {
+	svc, _, _, _ := newTestTorrentSvc()
+	err := svc.Delete(context.Background(), uuid.New(), uuid.New())
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestAddRejectsOversizedMagnet(t *testing.T) {
+	svc, _, _, _ := newTestTorrentSvc()
+	huge := validMagnet + "&extra=" + strings.Repeat("x", 4096)
+	_, err := svc.Add(context.Background(), uuid.New(), huge)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrInvalidInput {
+		t.Fatalf("expected ErrInvalidInput for oversized magnet, got %v", err)
+	}
+}
+
+func TestInfoHashFromMagnet(t *testing.T) {
+	h, err := InfoHashFromMagnet("  magnet:?xt=urn:btih:ABCDEF0123456789ABCDEF0123456789ABCDEF01&dn=x  ")
+	if err != nil {
+		t.Fatalf("valid magnet: %v", err)
+	}
+	if h != "abcdef0123456789abcdef0123456789abcdef01" {
+		t.Errorf("info hash not normalized: %q", h)
+	}
+
+	if _, err := InfoHashFromMagnet("not-a-magnet"); err == nil {
+		t.Error("expected error for invalid magnet")
+	}
+}
+
+func TestNormalizeFileTypeCoversAllBranches(t *testing.T) {
+	cases := map[string]domain.FileType{
+		"image":   domain.FileTypeImage,
+		"PDF":     domain.FileTypePDF,
+		"Epub":    domain.FileTypeEPUB,
+		"cbz":     domain.FileTypeCBZ,
+		"CBR":     domain.FileTypeCBR,
+		"":        domain.FileTypeUnknown,
+		"unknown": domain.FileTypeUnknown,
+		"weird":   domain.FileTypeUnknown,
+	}
+	for in, want := range cases {
+		if got := normalizeFileType(in); got != want {
+			t.Errorf("normalizeFileType(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/repository"
 )
 
 // fakeUserRepo is an in-memory UserRepository for unit tests. Integration tests
@@ -57,17 +59,95 @@ func (r *fakeUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User,
 	return nil, domain.NewError(domain.ErrNotFound, "user not found", nil)
 }
 
-func newTestService() AuthService {
-	return NewAuthService(newFakeUserRepo(), AuthConfig{
+// fakeRefreshRepo is a RefreshTokenRepository backed by a map. Mirrors the
+// semantics of the Postgres implementation closely enough for auth unit tests
+// (rotation, reuse detection, revoke-all).
+type fakeRefreshRepo struct {
+	mu      sync.Mutex
+	byJTI   map[uuid.UUID]*repository.RefreshToken
+	byID    map[uuid.UUID]*repository.RefreshToken
+}
+
+func newFakeRefreshRepo() *fakeRefreshRepo {
+	return &fakeRefreshRepo{
+		byJTI: map[uuid.UUID]*repository.RefreshToken{},
+		byID:  map[uuid.UUID]*repository.RefreshToken{},
+	}
+}
+
+func (r *fakeRefreshRepo) Create(_ context.Context, t repository.RefreshToken) (*repository.RefreshToken, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t.ID = uuid.New()
+	t.CreatedAt = time.Now()
+	copy := t
+	r.byJTI[t.JTI] = &copy
+	r.byID[t.ID] = &copy
+	return &copy, nil
+}
+
+func (r *fakeRefreshRepo) GetByJTI(_ context.Context, jti uuid.UUID) (*repository.RefreshToken, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.byJTI[jti]
+	if !ok {
+		return nil, domain.NewError(domain.ErrNotFound, "refresh token not found", nil)
+	}
+	copy := *t
+	return &copy, nil
+}
+
+func (r *fakeRefreshRepo) MarkReplaced(_ context.Context, oldID, newID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.byID[oldID]
+	if !ok || t.RevokedAt != nil {
+		return domain.NewError(domain.ErrConflict, "refresh token already used", nil)
+	}
+	now := time.Now()
+	t.RevokedAt = &now
+	id := newID
+	t.ReplacedBy = &id
+	return nil
+}
+
+func (r *fakeRefreshRepo) Revoke(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	t, ok := r.byID[id]
+	if !ok || t.RevokedAt != nil {
+		return nil
+	}
+	now := time.Now()
+	t.RevokedAt = &now
+	return nil
+}
+
+func (r *fakeRefreshRepo) RevokeAllForUser(_ context.Context, userID uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	for _, t := range r.byID {
+		if t.UserID == userID && t.RevokedAt == nil {
+			t.RevokedAt = &now
+		}
+	}
+	return nil
+}
+
+func newTestService() (AuthService, *fakeRefreshRepo) {
+	refresh := newFakeRefreshRepo()
+	svc := NewAuthService(newFakeUserRepo(), refresh, AuthConfig{
 		AccessSecret:  []byte("a-very-long-test-secret-32-chars!!"),
 		RefreshSecret: []byte("a-different-refresh-secret-32chars!"),
 		AccessTTL:     5 * time.Minute,
 		RefreshTTL:    time.Hour,
 	})
+	return svc, refresh
 }
 
 func TestRegisterAndLoginRoundtrip(t *testing.T) {
-	svc := newTestService()
+	svc, _ := newTestService()
 	ctx := context.Background()
 
 	if _, err := svc.Register(ctx, "alice", "Alice@Example.com ", "hunter22-long"); err != nil {
@@ -101,7 +181,7 @@ func TestRegisterAndLoginRoundtrip(t *testing.T) {
 }
 
 func TestLoginRejectsWrongPassword(t *testing.T) {
-	svc := newTestService()
+	svc, _ := newTestService()
 	ctx := context.Background()
 	_, _ = svc.Register(ctx, "bob", "bob@example.com", "correct-horse")
 
@@ -113,7 +193,7 @@ func TestLoginRejectsWrongPassword(t *testing.T) {
 }
 
 func TestRegisterValidation(t *testing.T) {
-	svc := newTestService()
+	svc, _ := newTestService()
 	ctx := context.Background()
 
 	cases := []struct {
@@ -122,6 +202,7 @@ func TestRegisterValidation(t *testing.T) {
 		{"short username", "ab", "a@b.com", "12345678"},
 		{"bad email", "alice", "no-at-sign", "12345678"},
 		{"short password", "alice", "a@b.com", "short"},
+		{"long password", "alice", "a@b.com", string(make([]byte, 73))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -134,8 +215,8 @@ func TestRegisterValidation(t *testing.T) {
 	}
 }
 
-func TestRefreshProducesFreshAccess(t *testing.T) {
-	svc := newTestService()
+func TestRefreshProducesFreshAccessAndRotates(t *testing.T) {
+	svc, _ := newTestService()
 	ctx := context.Background()
 	_, _ = svc.Register(ctx, "carol", "carol@example.com", "passphrase9")
 
@@ -144,21 +225,78 @@ func TestRefreshProducesFreshAccess(t *testing.T) {
 		t.Fatalf("login: %v", err)
 	}
 
-	access, err := svc.Refresh(ctx, refresh)
+	result, err := svc.Refresh(ctx, refresh)
 	if err != nil {
 		t.Fatalf("refresh: %v", err)
 	}
-	claims, err := svc.ParseAccessToken(access)
+	if result.Refresh == refresh {
+		t.Fatalf("refresh token was not rotated")
+	}
+	claims, err := svc.ParseAccessToken(result.Access)
 	if err != nil {
 		t.Fatalf("parse refreshed access: %v", err)
 	}
 	if claims.Type != tokenTypeAccess {
 		t.Errorf("expected access type, got %s", claims.Type)
 	}
+
+	// Old refresh token must now be rejected — it was rotated.
+	if _, err := svc.Refresh(ctx, refresh); err == nil {
+		t.Fatal("expected second use of rotated refresh to fail")
+	}
+}
+
+func TestRefreshReuseRevokesEntireFamily(t *testing.T) {
+	svc, store := newTestService()
+	ctx := context.Background()
+	_, _ = svc.Register(ctx, "dana", "dana@example.com", "passphrase9")
+
+	_, refresh1, user, err := svc.Login(ctx, "dana@example.com", "passphrase9")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+
+	result, err := svc.Refresh(ctx, refresh1)
+	if err != nil {
+		t.Fatalf("first refresh: %v", err)
+	}
+	refresh2 := result.Refresh
+
+	// Replay the (now rotated) first token — attacker scenario.
+	if _, err := svc.Refresh(ctx, refresh1); err == nil {
+		t.Fatal("expected replay of rotated token to fail")
+	}
+
+	// Reuse detection should revoke the live token too, so the legit next
+	// refresh is also denied.
+	if _, err := svc.Refresh(ctx, refresh2); err == nil {
+		t.Fatal("expected token-family to be revoked after replay")
+	}
+
+	// Every stored row for the user is revoked.
+	for _, r := range store.byID {
+		if r.UserID == user.ID && r.RevokedAt == nil {
+			t.Fatalf("expected token %v to be revoked", r.JTI)
+		}
+	}
+}
+
+func TestLogoutRevokesRefreshToken(t *testing.T) {
+	svc, _ := newTestService()
+	ctx := context.Background()
+	_, _ = svc.Register(ctx, "erin", "erin@example.com", "passphrase9")
+	_, refresh, _, _ := svc.Login(ctx, "erin@example.com", "passphrase9")
+
+	if err := svc.Logout(ctx, refresh); err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	if _, err := svc.Refresh(ctx, refresh); err == nil {
+		t.Fatal("expected refresh after logout to fail")
+	}
 }
 
 func TestAccessTokenCannotBeUsedAsRefresh(t *testing.T) {
-	svc := newTestService()
+	svc, _ := newTestService()
 	ctx := context.Background()
 	_, _ = svc.Register(ctx, "dave", "dave@example.com", "passphrase9")
 	access, _, _, _ := svc.Login(ctx, "dave@example.com", "passphrase9")

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/repository"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/repository"
 )
 
 var magnetRE = regexp.MustCompile(`^magnet:\?xt=urn:btih:([a-fA-F0-9]{40})`)
@@ -31,8 +31,16 @@ func NewTorrentService(
 	return &torrentService{sessions: sessions, files: files, library: library, engine: engine}
 }
 
+// maxMagnetURILength bounds the magnet URI an API client may submit. The
+// BitTorrent spec has no hard cap but real-world magnets rarely exceed 1 KB;
+// the ceiling blocks trivial request-bloat DoS without rejecting legit links.
+const maxMagnetURILength = 2048
+
 func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error) {
 	magnetURI = strings.TrimSpace(magnetURI)
+	if len(magnetURI) > maxMagnetURILength {
+		return nil, domain.NewError(domain.ErrInvalidInput, "magnet URI too long", nil)
+	}
 	m := magnetRE.FindStringSubmatch(magnetURI)
 	if m == nil {
 		return nil, domain.NewError(domain.ErrInvalidInput,
@@ -62,10 +70,12 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	}
 
 	// Fire engine call in the request context. If the engine is unreachable
-	// we roll back the DB row so the user can retry cleanly.
+	// we roll back the DB row so the user can retry cleanly. The underlying
+	// error is wrapped (not exposed) so upstream URLs / connection strings
+	// never leak into the API response.
 	if _, err := s.engine.Add(ctx, magnetURI); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
-		return nil, domain.NewError(domain.ErrInternal, fmt.Sprintf("engine error: %v", err), err)
+		return nil, domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
 	}
 
 	// Auto-shelf: create a library row with the infoHash as placeholder title.

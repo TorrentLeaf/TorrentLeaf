@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 func newTestAdminSvc(t *testing.T) (AdminService, *fakeTorrentRepo, *fakeEngine, uuid.UUID) {

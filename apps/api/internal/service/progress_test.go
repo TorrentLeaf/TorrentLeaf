@@ -9,7 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 // fakeProgressRepo is an in-memory ProgressRepository for unit tests.
@@ -138,6 +138,46 @@ func TestProgressEnforcesOwnership(t *testing.T) {
 	var de *domain.Error
 	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
 		t.Fatalf("stranger should get ErrNotFound, got %v", err)
+	}
+}
+
+func TestProgressGetReturnsSavedRow(t *testing.T) {
+	svc, _, _, userID, fileID := newTestProgressSvc(t)
+	ctx := context.Background()
+
+	if _, err := svc.Update(ctx, userID, fileID, UpdateProgress{CurrentPage: 3, TotalPages: 10, Mode: domain.ReadingModePaginated}); err != nil {
+		t.Fatalf("seed update: %v", err)
+	}
+
+	got, err := svc.Get(ctx, userID, fileID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.CurrentPage != 3 || got.TotalPages != 10 {
+		t.Errorf("unexpected row: %+v", got)
+	}
+}
+
+func TestProgressGetEnforcesOwnership(t *testing.T) {
+	svc, _, _, userID, fileID := newTestProgressSvc(t)
+	ctx := context.Background()
+	if _, err := svc.Update(ctx, userID, fileID, UpdateProgress{CurrentPage: 1, TotalPages: 10}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	_, err := svc.Get(ctx, uuid.New(), fileID)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("stranger should get ErrNotFound, got %v", err)
+	}
+}
+
+func TestProgressGetMissingFile(t *testing.T) {
+	svc, _, _, userID, _ := newTestProgressSvc(t)
+	_, err := svc.Get(context.Background(), userID, uuid.New())
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 

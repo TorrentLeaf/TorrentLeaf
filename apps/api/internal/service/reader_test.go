@@ -7,7 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 func TestNaturalLessOrdersNumericFilenames(t *testing.T) {
@@ -185,6 +185,76 @@ func TestListPagesScopedToSingleFile(t *testing.T) {
 	}
 	if len(pages) != 1 || pages[0].FileID != wanted {
 		t.Fatalf("expected single page for wanted file, got %+v", pages)
+	}
+}
+
+func TestResolveStreamTargetReturnsUpstreamCoords(t *testing.T) {
+	sessions := newFakeTorrentRepo()
+	files := newFakeFileRepo()
+	svc := NewReaderService(sessions, files, nil)
+	userID := uuid.New()
+	hash := "3333333333333333333333333333333333333333"
+
+	session, _ := sessions.Create(context.Background(), domain.TorrentSession{UserID: userID, InfoHash: hash})
+	fid := uuid.New()
+	_ = files.CreateBatch(context.Background(), []domain.TorrentFile{{
+		ID:        fid,
+		SessionID: session.ID,
+		Index:     7,
+		Name:      "book.pdf",
+		FileType:  domain.FileTypePDF,
+		MimeType:  "application/pdf",
+	}})
+
+	tgt, err := svc.ResolveStreamTarget(context.Background(), userID, fid)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if tgt.InfoHash != hash {
+		t.Errorf("info hash = %q, want %q", tgt.InfoHash, hash)
+	}
+	if tgt.FileIndex != 7 {
+		t.Errorf("file index = %d, want 7", tgt.FileIndex)
+	}
+	if tgt.FileType != domain.FileTypePDF {
+		t.Errorf("file type = %q, want pdf", tgt.FileType)
+	}
+	if tgt.MimeType != "application/pdf" {
+		t.Errorf("mime = %q", tgt.MimeType)
+	}
+}
+
+func TestResolveStreamTargetScopesByUser(t *testing.T) {
+	sessions := newFakeTorrentRepo()
+	files := newFakeFileRepo()
+	svc := NewReaderService(sessions, files, nil)
+	owner := uuid.New()
+
+	session, _ := sessions.Create(context.Background(), domain.TorrentSession{
+		UserID:   owner,
+		InfoHash: "4444444444444444444444444444444444444444",
+	})
+	fid := uuid.New()
+	_ = files.CreateBatch(context.Background(), []domain.TorrentFile{{
+		ID: fid, SessionID: session.ID, Index: 0, Name: "a.jpg", FileType: domain.FileTypeImage,
+	}})
+
+	_, err := svc.ResolveStreamTarget(context.Background(), uuid.New(), fid)
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("stranger should get ErrNotFound, got %v", err)
+	}
+}
+
+func TestResolveStreamTargetMissingFile(t *testing.T) {
+	sessions := newFakeTorrentRepo()
+	files := newFakeFileRepo()
+	svc := NewReaderService(sessions, files, nil)
+
+	_, err := svc.ResolveStreamTarget(context.Background(), uuid.New(), uuid.New())
+	var de *domain.Error
+	if !errors.As(err, &de) || de.Code != domain.ErrNotFound {
+		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
