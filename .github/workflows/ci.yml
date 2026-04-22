@@ -84,7 +84,9 @@ jobs:
           cache-dependency-path: apps/api/go.sum
 
       - name: Install migrate
-        run: go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+        run: |
+          curl -fsSL https://github.com/golang-migrate/migrate/releases/latest/download/migrate.linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin migrate
 
       - name: Download deps
         run: go mod download
