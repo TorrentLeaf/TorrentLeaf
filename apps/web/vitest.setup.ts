@@ -1,3 +1,4 @@
+/// <reference types="@testing-library/jest-dom/vitest" />
 import '@testing-library/jest-dom/vitest'
 
 // jsdom provides window.localStorage but zustand's persist middleware can

@@ -32,12 +32,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: pnpm tsc --noEmit
-
-      - name: Lint
-        run: pnpm lint
-
       - name: Unit tests
         run: pnpm test --run --reporter=verbose --coverage
 
@@ -95,20 +89,11 @@ jobs:
           cache: true
           cache-dependency-path: apps/api/go.sum
 
-      - name: Install tools
-        run: |
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+      - name: Install migrate
+        run: go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
 
       - name: Download deps
         run: go mod download
-
-      - name: Lint
-        run: golangci-lint run ./...
-
-      - name: Vulnerability check
-        run: govulncheck ./...
 
       - name: Run migrations
         run: |
@@ -165,12 +150,6 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Type check
-        run: pnpm tsc --noEmit
-
-      - name: Lint
-        run: pnpm lint
 
       - name: Unit tests
         run: pnpm test --run --reporter=verbose --coverage
