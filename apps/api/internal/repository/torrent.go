@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 type TorrentRepository interface {

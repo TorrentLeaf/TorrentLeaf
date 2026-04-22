@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/middleware"
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/middleware"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 type ReaderHandler struct {

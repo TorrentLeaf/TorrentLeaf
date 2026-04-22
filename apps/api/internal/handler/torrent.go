@@ -7,9 +7,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/middleware"
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/middleware"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 type TorrentHandler struct {
@@ -184,6 +184,8 @@ func mapTorrentError(err error) error {
 	case domain.ErrUnauthorized:
 		return fiber.NewError(fiber.StatusUnauthorized, de.Message)
 	default:
-		return fiber.NewError(fiber.StatusInternalServerError, de.Message)
+		// ErrInternal and unknown codes must not leak the underlying message
+		// (it may include engine errors, SQL fragments, or upstream URLs).
+		return fiber.NewError(fiber.StatusInternalServerError, "internal error")
 	}
 }

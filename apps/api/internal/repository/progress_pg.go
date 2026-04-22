@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 type progressRepo struct {

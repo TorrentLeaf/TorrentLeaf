@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 type AdminHandler struct {

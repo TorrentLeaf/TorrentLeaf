@@ -10,8 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/middleware"
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/middleware"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 // TorrentWSHandler streams real-time torrent progress via WebSocket. Upgrade

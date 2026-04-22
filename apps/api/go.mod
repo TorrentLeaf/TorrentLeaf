@@ -1,4 +1,4 @@
-module github.com/seuuser/torrentleaf/api
+module github.com/Dellareti/torrentleaf/api
 
 go 1.22
 

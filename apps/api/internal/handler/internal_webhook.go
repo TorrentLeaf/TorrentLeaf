@@ -6,7 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 // InternalWebhookHandler handles callbacks from the torrent-engine. Authenticated

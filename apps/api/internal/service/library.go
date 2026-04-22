@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/repository"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/repository"
 )
 
 // LibraryCard is the read-model returned by List. It flattens the enriched
