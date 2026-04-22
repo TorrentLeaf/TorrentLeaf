@@ -33,13 +33,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Unit tests
-        run: pnpm exec vitest run --reporter=verbose --coverage
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v5
-        with:
-          flags: frontend
-          directory: apps/web/coverage
+        run: pnpm exec vitest run --reporter=verbose
 
       - name: Build
         run: pnpm build
@@ -98,7 +92,7 @@ jobs:
       - name: Run migrations
         run: |
           migrate -path migrations -database \
-            "postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test?sslmode=disable" up
+            "postgres://torrentleaf:secret@localhost:5432/torrentleaf_test?sslmode=disable" up
         env:
           DATABASE_URL: postgresql://torrentleaf:secret@localhost:5432/torrentleaf_test
 
@@ -152,14 +146,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Unit tests
-        run: pnpm exec vitest run --reporter=verbose --coverage
+        run: pnpm exec vitest run --reporter=verbose
         env:
           NODE_ENV: test
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v5
-        with:
-          flags: torrent-engine
 
       - name: Build
         run: pnpm build
