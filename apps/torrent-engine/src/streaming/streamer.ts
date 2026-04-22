@@ -7,7 +7,7 @@ interface ParsedRange {
   end: number
 }
 
-function parseRange(header: string, total: number): ParsedRange | null {
+export function parseRange(header: string, total: number): ParsedRange | null {
   const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim())
   if (!match) return null
   const startStr = match[1]

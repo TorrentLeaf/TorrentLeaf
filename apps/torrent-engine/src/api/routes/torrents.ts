@@ -3,7 +3,10 @@ import { z } from 'zod'
 import { torrentManager } from '../../torrent/manager.js'
 
 const AddBody = z.object({
-  magnetURI: z.string().regex(/^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}/),
+  magnetURI: z
+    .string()
+    .max(2048)
+    .regex(/^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(&.*)?$/),
 })
 
 const PriorityBody = z.object({

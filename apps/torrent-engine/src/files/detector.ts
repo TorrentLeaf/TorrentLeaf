@@ -30,7 +30,11 @@ const EXT_TO_MIME: Record<string, string> = {
   '.zip': 'application/zip',
 }
 
-const BLOCKED_EXTENSIONS = new Set(['.exe', '.sh', '.bat', '.ps1', '.msi', '.dmg'])
+const BLOCKED_EXTENSIONS = new Set([
+  '.exe', '.sh', '.bash', '.zsh', '.bat', '.cmd', '.ps1',
+  '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage',
+  '.vbs', '.js', '.ts', '.py', '.rb', '.pl',
+])
 
 export function detectMime(filename: string): string {
   return EXT_TO_MIME[path.extname(filename).toLowerCase()] ?? 'application/octet-stream'
@@ -44,13 +48,20 @@ export function isBlocked(filename: string): boolean {
   return BLOCKED_EXTENSIONS.has(path.extname(filename).toLowerCase())
 }
 
+export function isSafePath(filePath: string): boolean {
+  const normalized = path.normalize(filePath)
+  return !normalized.split(/[/\\]/).includes('..') && !path.isAbsolute(normalized)
+}
+
 export function analyzeFiles(torrent: WTTorrent): FileInfo[] {
-  return torrent.files.map((file, index) => ({
-    index,
-    name: file.name,
-    path: file.path,
-    length: file.length,
-    mimeType: detectMime(file.name),
-    fileType: classifyFile(file.name),
-  }))
+  return torrent.files
+    .map((file, index) => ({
+      index,
+      name: file.name,
+      path: file.path,
+      length: file.length,
+      mimeType: detectMime(file.name),
+      fileType: classifyFile(file.name),
+    }))
+    .filter((f) => isSafePath(f.path) && !isBlocked(f.name))
 }

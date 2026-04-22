@@ -2,11 +2,12 @@ import axios from 'axios'
 import Redis from 'ioredis'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
-import { analyzeFiles } from '../files/detector.js'
+import { analyzeFiles, isBlocked, isSafePath } from '../files/detector.js'
 import { engine, type WTTorrent } from './engine.js'
 import type { TorrentStatus } from './types.js'
 
-const MAGNET_RE = /^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}/
+const MAGNET_RE = /^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(&.*)?$/
+const MAGNET_MAX_LEN = 2048
 
 const redis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: null })
 let progressTimer: NodeJS.Timeout | null = null
@@ -14,9 +15,22 @@ let progressTimer: NodeJS.Timeout | null = null
 export class TorrentManager {
   constructor() {
     // Listen for metadata on ALL torrents at the client level.
-    // When any torrent becomes ready, send the metadata webhook.
+    // When any torrent becomes ready, verify paths are safe and send the metadata webhook.
     engine.onTorrentReady((torrent) => {
       logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent metadata ready')
+
+      const unsafe = torrent.files.find((f) => !isSafePath(f.path) || isBlocked(f.name))
+      if (unsafe) {
+        logger.warn(
+          { infoHash: torrent.infoHash, file: unsafe.path },
+          'removing torrent: unsafe or blocked file path',
+        )
+        engine.remove(torrent.infoHash).catch((err) => {
+          logger.warn({ err, infoHash: torrent.infoHash }, 'failed to remove unsafe torrent')
+        })
+        return
+      }
+
       this.notifyMetadataReady(torrent).catch((err) => {
         logger.warn({ err, infoHash: torrent.infoHash }, 'metadata webhook failed')
       })
@@ -29,6 +43,9 @@ export class TorrentManager {
    * Otherwise returns a minimal status — the metadata webhook fires later.
    */
   add(magnetURI: string): TorrentStatus {
+    if (magnetURI.length > MAGNET_MAX_LEN) {
+      throw new Error('magnet uri too long')
+    }
     if (!MAGNET_RE.test(magnetURI)) {
       throw new Error('invalid magnet uri')
     }
@@ -85,6 +102,9 @@ export class TorrentManager {
     if (!t) throw new Error('torrent not found')
     const file = t.files[fileIndex]
     if (!file) throw new Error('file index out of range')
+    if (!isSafePath(file.path) || isBlocked(file.name)) {
+      throw new Error('unsafe or blocked file')
+    }
 
     if (priority === 0) {
       file.deselect()
