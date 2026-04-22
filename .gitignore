@@ -20,6 +20,8 @@ dist/
 apps/api/server
 apps/api/tmp/
 .gocache/
+.gomodcache/
+.gopath/
 
 # ===========================
 # Environment variables
