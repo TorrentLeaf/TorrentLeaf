@@ -33,7 +33,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Unit tests
-        run: pnpm test --run --reporter=verbose --coverage
+        run: pnpm exec vitest run --reporter=verbose --coverage
 
       - name: Upload coverage
         uses: codecov/codecov-action@v5
@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "1.24"
           cache: true
           cache-dependency-path: apps/api/go.sum
 
@@ -152,7 +152,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Unit tests
-        run: pnpm test --run --reporter=verbose --coverage
+        run: pnpm exec vitest run --reporter=verbose --coverage
         env:
           NODE_ENV: test
 
