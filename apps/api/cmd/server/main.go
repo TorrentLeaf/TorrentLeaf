@@ -19,14 +19,14 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 
-	"github.com/seuuser/torrentleaf/api/internal/handler"
-	"github.com/seuuser/torrentleaf/api/internal/middleware"
-	"github.com/seuuser/torrentleaf/api/internal/repository"
-	"github.com/seuuser/torrentleaf/api/internal/service"
-	"github.com/seuuser/torrentleaf/api/pkg/cache"
-	"github.com/seuuser/torrentleaf/api/pkg/config"
-	"github.com/seuuser/torrentleaf/api/pkg/db"
-	"github.com/seuuser/torrentleaf/api/pkg/logger"
+	"github.com/Dellareti/torrentleaf/api/internal/handler"
+	"github.com/Dellareti/torrentleaf/api/internal/middleware"
+	"github.com/Dellareti/torrentleaf/api/internal/repository"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/pkg/cache"
+	"github.com/Dellareti/torrentleaf/api/pkg/config"
+	"github.com/Dellareti/torrentleaf/api/pkg/db"
+	"github.com/Dellareti/torrentleaf/api/pkg/logger"
 )
 
 type deps struct {
@@ -40,6 +40,9 @@ type deps struct {
 	redis         *redis.Client
 	engineURL     string
 	webhookSecret string
+	production    bool
+	accessTTL     time.Duration
+	refreshTTL    time.Duration
 }
 
 func main() {
@@ -66,7 +69,8 @@ func main() {
 	defer func() { _ = redisClient.Close() }()
 
 	userRepo := repository.NewUserRepository(pool)
-	authSvc := service.NewAuthService(userRepo, service.AuthConfig{
+	refreshTokenRepo := repository.NewRefreshTokenRepository(pool)
+	authSvc := service.NewAuthService(userRepo, refreshTokenRepo, service.AuthConfig{
 		AccessSecret:  []byte(cfg.JWTSecret),
 		RefreshSecret: []byte(cfg.JWTRefreshSecret),
 		AccessTTL:     cfg.JWTAccessTTL,
@@ -85,7 +89,7 @@ func main() {
 	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)
 	adminSvc := service.NewAdminService(sessionRepo, engineClient)
 
-	app := newApp(log)
+	app := newApp(log, cfg)
 	registerRoutes(app, deps{
 		log:           log,
 		authSvc:       authSvc,
@@ -97,6 +101,9 @@ func main() {
 		redis:         redisClient.Client,
 		engineURL:     cfg.TorrentEngineURL,
 		webhookSecret: cfg.APIWebhookSecret,
+		production:    cfg.IsProduction(),
+		accessTTL:     cfg.JWTAccessTTL,
+		refreshTTL:    cfg.JWTRefreshTTL,
 	})
 
 	go func() {
@@ -119,7 +126,7 @@ func main() {
 	}
 }
 
-func newApp(log zerolog.Logger) *fiber.App {
+func newApp(log zerolog.Logger, cfg *config.Config) *fiber.App {
 	app := fiber.New(fiber.Config{
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -138,7 +145,8 @@ func newApp(log zerolog.Logger) *fiber.App {
 
 	app.Use(requestid.New())
 	app.Use(recover.New())
-	app.Use(cors.New())
+	app.Use(middleware.SecurityHeaders(cfg.IsProduction()))
+	app.Use(cors.New(corsConfig(cfg)))
 
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"status": "ok"})
@@ -146,6 +154,24 @@ func newApp(log zerolog.Logger) *fiber.App {
 	app.Get("/metrics", adaptor.HTTPHandler(promhttp.Handler()))
 
 	return app
+}
+
+// corsConfig locks CORS to known origins. In production, CORS_ALLOWED_ORIGINS
+// must be set explicitly; otherwise we default to a safe empty allowlist (no
+// cross-origin requests). Dev keeps the usual localhost pair.
+func corsConfig(cfg *config.Config) cors.Config {
+	base := cors.Config{
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Authorization",
+		AllowCredentials: true,
+		MaxAge:           86400,
+	}
+	if cfg.IsProduction() {
+		base.AllowOrigins = cfg.CORSAllowedOrigins
+		return base
+	}
+	base.AllowOrigins = "http://localhost:3000,http://localhost:8080"
+	return base
 }
 
 func registerRoutes(app *fiber.App, d deps) {
@@ -156,11 +182,19 @@ func registerRoutes(app *fiber.App, d deps) {
 
 	api := app.Group("/api/v1")
 
-	// Public auth routes.
-	auth := handler.NewAuthHandler(d.log, d.authSvc)
-	api.Post("/auth/register", auth.Register)
-	api.Post("/auth/login", auth.Login)
-	api.Post("/auth/refresh", auth.Refresh)
+	// Public auth routes. Rate-limited per IP — credential stuffing and
+	// account enumeration are the obvious abuse vectors. Per security skill
+	// §2 the budget is 5/min on write endpoints; refresh gets a bit more
+	// headroom because short access-token TTLs make refreshes frequent.
+	auth := handler.NewAuthHandler(d.log, d.authSvc, handler.AuthHandlerOptions{
+		Production: d.production,
+		AccessTTL:  d.accessTTL,
+		RefreshTTL: d.refreshTTL,
+	})
+	authLimit := middleware.RateLimit(d.redis, "auth", 5, time.Minute)
+	api.Post("/auth/register", authLimit, auth.Register)
+	api.Post("/auth/login", authLimit, auth.Login)
+	api.Post("/auth/refresh", middleware.RateLimit(d.redis, "auth-refresh", 30, time.Minute), auth.Refresh)
 	api.Post("/auth/logout", auth.Logout)
 
 	// WebSocket + stream routes use RequireAuthWS (token via ?token=).
@@ -180,11 +214,22 @@ func registerRoutes(app *fiber.App, d deps) {
 	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
 	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
 
-	// All routes below require a valid access token via Authorization header.
-	protected := api.Group("", middleware.RequireAuth(d.authSvc))
+	// All routes below require a valid access token (cookie or bearer header)
+	// plus a per-user rate limit. The limiter sits after RequireAuth so it
+	// keys on the authenticated user ID; see middleware.RateLimitByUser for
+	// the IP fallback semantics.
+	protected := api.Group("",
+		middleware.RequireAuth(d.authSvc),
+		middleware.RateLimitByUser(d.redis, "api", 100, time.Minute),
+	)
 
 	torrents := handler.NewTorrentHandler(d.log, d.torrentSvc)
-	protected.Post("/torrents", torrents.Add)
+	// Add-torrent has its own tighter budget on top of the per-user API limit:
+	// swarm pressure and disk use make 10/hour a reasonable ceiling per skill §2.
+	protected.Post("/torrents",
+		middleware.RateLimitByUser(d.redis, "torrent-add", 10, time.Hour),
+		torrents.Add,
+	)
 	protected.Get("/torrents", torrents.List)
 	protected.Get("/torrents/:id", torrents.Get)
 	protected.Delete("/torrents/:id", torrents.Delete)

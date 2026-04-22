@@ -6,22 +6,29 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
-	"github.com/seuuser/torrentleaf/api/internal/service"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/service"
 )
 
 const (
 	CtxUserID = "auth.userID"
 	CtxRole   = "auth.role"
+
+	// CookieAccessToken is the cookie name the auth handler writes on login.
+	// Duplicated here (instead of imported from handler) to avoid a handler →
+	// middleware import cycle via RequireAuth.
+	CookieAccessToken = "access_token"
 )
 
-// RequireAuth validates the Authorization: Bearer <access-token> header and
-// injects the authenticated user ID and role into the Fiber context.
+// RequireAuth validates the access token from either the
+// Authorization: Bearer <token> header (non-browser clients) or the
+// httpOnly access_token cookie (browser clients) and injects the authenticated
+// user ID and role into the Fiber context.
 func RequireAuth(auth service.AuthService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		token, err := bearerToken(c)
-		if err != nil {
-			return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+		token := tokenFromCookieOrHeader(c)
+		if token == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
 		}
 		claims, err := auth.ParseAccessToken(token)
 		if err != nil {
@@ -36,16 +43,16 @@ func RequireAuth(auth service.AuthService) fiber.Handler {
 // RequireAuthWS is like RequireAuth but additionally accepts the access token
 // via the ?token= query string — the browser WebSocket API cannot set custom
 // headers, so clients pass the token on the URL. Token falls back to the
-// Authorization header for non-browser callers (e.g. integration tests).
+// cookie or Authorization header for non-browser callers (e.g. integration
+// tests).
 func RequireAuthWS(auth service.AuthService) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token := strings.TrimSpace(c.Query("token"))
 		if token == "" {
-			t, err := bearerToken(c)
-			if err != nil {
-				return fiber.NewError(fiber.StatusUnauthorized, err.Error())
-			}
-			token = t
+			token = tokenFromCookieOrHeader(c)
+		}
+		if token == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
 		}
 		claims, err := auth.ParseAccessToken(token)
 		if err != nil {
@@ -75,18 +82,21 @@ func UserID(c *fiber.Ctx) (uuid.UUID, bool) {
 	return id, ok
 }
 
-func bearerToken(c *fiber.Ctx) (string, error) {
+// tokenFromCookieOrHeader reads the access token from the httpOnly cookie
+// first (browser default) then falls back to the Authorization: Bearer header
+// for non-browser clients. Returns empty string when neither is present or
+// well-formed — callers decide how to surface the 401.
+func tokenFromCookieOrHeader(c *fiber.Ctx) string {
+	if v := strings.TrimSpace(c.Cookies(CookieAccessToken)); v != "" {
+		return v
+	}
 	h := c.Get("Authorization")
 	if h == "" {
-		return "", fiber.NewError(fiber.StatusUnauthorized, "missing authorization header")
+		return ""
 	}
 	const prefix = "Bearer "
 	if !strings.HasPrefix(h, prefix) {
-		return "", fiber.NewError(fiber.StatusUnauthorized, "invalid authorization scheme")
+		return ""
 	}
-	token := strings.TrimSpace(h[len(prefix):])
-	if token == "" {
-		return "", fiber.NewError(fiber.StatusUnauthorized, "empty bearer token")
-	}
-	return token, nil
+	return strings.TrimSpace(h[len(prefix):])
 }
