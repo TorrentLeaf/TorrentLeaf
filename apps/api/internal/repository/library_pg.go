@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/seuuser/torrentleaf/api/internal/domain"
+	"github.com/Dellareti/torrentleaf/api/internal/domain"
 )
 
 type libraryRepo struct {
@@ -66,11 +66,9 @@ func (r *libraryRepo) ListByUser(ctx context.Context, userID uuid.UUID, filter L
 	// Build dynamic WHERE clause. Keep it simple: two optional filters.
 	where := "li.user_id = $1"
 	args := []any{userID}
-	n := 2
 	if filter.Type != "" {
-		where += fmt.Sprintf(" AND li.content_type = $%d", n)
+		where += fmt.Sprintf(" AND li.content_type = $%d", len(args)+1)
 		args = append(args, filter.Type)
-		n++
 	}
 	if filter.FavoritesOnly {
 		where += " AND fav.session_id IS NOT NULL"
