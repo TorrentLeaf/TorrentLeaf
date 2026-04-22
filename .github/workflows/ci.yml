@@ -160,9 +160,6 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     needs: [frontend, backend, torrent-engine]
-    permissions:
-      security-events: write
-      contents: read
 
     steps:
       - uses: actions/checkout@v6
@@ -173,14 +170,23 @@ jobs:
           scan-type: "fs"
           scan-ref: "."
           severity: "CRITICAL,HIGH"
-          format: "sarif"
-          output: "trivy-results.sarif"
+          format: "table"
 
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v4
+      - name: Generate Trivy JSON report
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          severity: "CRITICAL,HIGH"
+          format: "json"
+          output: "trivy-results.json"
+
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@v5
         if: always()
         with:
-          sarif_file: "trivy-results.sarif"
+          name: trivy-security-report
+          path: trivy-results.json
 
   # ─── E2E Tests ────────────────────────────────────────────────────────────────
   e2e:
