@@ -10,20 +10,21 @@ import (
 )
 
 type Config struct {
-	Env              string
-	Port             string
-	LogLevel         string
-	DatabaseURL      string
-	RedisURL         string
-	TorrentEngineURL string
-	JWTSecret        string
-	JWTRefreshSecret string
-	JWTAccessTTL     time.Duration
-	JWTRefreshTTL    time.Duration
-	MinioEndpoint    string
-	MinioAccessKey   string
-	MinioSecretKey   string
-	APIWebhookSecret string
+	Env                string
+	Port               string
+	LogLevel           string
+	DatabaseURL        string
+	RedisURL           string
+	TorrentEngineURL   string
+	JWTSecret          string
+	JWTRefreshSecret   string
+	JWTAccessTTL       time.Duration
+	JWTRefreshTTL      time.Duration
+	MinioEndpoint      string
+	MinioAccessKey     string
+	MinioSecretKey     string
+	APIWebhookSecret   string
+	CORSAllowedOrigins string
 }
 
 func Load() (*Config, error) {
@@ -43,7 +44,8 @@ func Load() (*Config, error) {
 		MinioEndpoint:    os.Getenv("MINIO_ENDPOINT"),
 		MinioAccessKey:   os.Getenv("MINIO_ACCESS_KEY"),
 		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
-		APIWebhookSecret: os.Getenv("API_WEBHOOK_SECRET"),
+		APIWebhookSecret:   os.Getenv("API_WEBHOOK_SECRET"),
+		CORSAllowedOrigins: os.Getenv("CORS_ALLOWED_ORIGINS"),
 	}
 
 	if err := cfg.validate(); err != nil {
