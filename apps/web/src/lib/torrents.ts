@@ -38,3 +38,14 @@ export interface TorrentProgress {
   uploadSpeed: number
   peers: number
 }
+
+import { api } from './api'
+
+export async function deleteTorrent(id: string): Promise<void> {
+  await api.delete(`/torrents/${id}`)
+}
+
+export async function addTorrent(magnetURI: string): Promise<TorrentSession> {
+  const { data } = await api.post<TorrentSession>('/torrents', { magnetURI })
+  return data
+}

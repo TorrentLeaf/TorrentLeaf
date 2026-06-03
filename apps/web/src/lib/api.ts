@@ -50,11 +50,14 @@ async function refreshToken(): Promise<string | null> {
   if (!refresh) return null
 
   try {
-    const { data } = await axios.post<{ accessToken: string }>(
+    const { data } = await axios.post<{ accessToken: string; refreshToken?: string }>(
       `${baseURL}/api/v1/auth/refresh`,
       { refreshToken: refresh },
     )
-    useAuthStore.getState().setTokens(data.accessToken, refresh)
+    // The server rotates refresh tokens — always store the new one if provided,
+    // otherwise keep the current one (for backward compat).
+    const newRefresh = data.refreshToken ?? refresh
+    useAuthStore.getState().setTokens(data.accessToken, newRefresh)
     return data.accessToken
   } catch {
     return null

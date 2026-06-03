@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Leaf, Library, Plus, LogIn, LogOut, ChevronDown } from 'lucide-react'
+import { Leaf, Library, Plus, LogIn, LogOut, ChevronDown, Settings } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -99,6 +99,12 @@ export function Navbar() {
             <Link href={'/library' as never}>
               <Library className="mr-2 h-4 w-4" />
               Library
+            </Link>
+          </Button>
+          <Button asChild variant="ghost" size="sm">
+            <Link href={'/settings' as never}>
+              <Settings className="mr-2 h-4 w-4" />
+              Settings
             </Link>
           </Button>
           <Button asChild variant="default" size="sm">

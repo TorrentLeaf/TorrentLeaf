@@ -9,8 +9,10 @@ import {
   setFavorite,
   type LibraryItemType,
 } from '@/lib/library'
+import { deleteTorrent } from '@/lib/torrents'
 import { TorrentCard } from '@/components/shared/TorrentCard'
 import { Button } from '@/components/ui/button'
+import { useToast } from '@/hooks/use-toast'
 
 type FilterType = LibraryItemType | 'all'
 
@@ -19,6 +21,7 @@ const FILTERS: { value: FilterType; label: string }[] = [
   { value: 'manga', label: 'Manga' },
   { value: 'book', label: 'Books' },
   { value: 'document', label: 'Documents' },
+  { value: 'video', label: 'Video' },
   { value: 'other', label: 'Other' },
 ]
 
@@ -26,6 +29,7 @@ export default function LibraryPage() {
   const [typeFilter, setTypeFilter] = useState<FilterType>('all')
   const [favoritesOnly, setFavoritesOnly] = useState(false)
   const queryClient = useQueryClient()
+  const { toast } = useToast()
 
   const { data: cards = [], isLoading } = useQuery({
     queryKey: ['library', typeFilter, favoritesOnly],
@@ -37,6 +41,17 @@ export default function LibraryPage() {
       setFavorite(id, !current),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['library'] })
+    },
+  })
+
+  const deleteM = useMutation({
+    mutationFn: (sessionId: string) => deleteTorrent(sessionId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['library'] })
+      toast({ title: 'Torrent deleted', description: 'The torrent has been removed from your library.' })
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to delete torrent.', variant: 'destructive' })
     },
   })
 
@@ -99,6 +114,7 @@ export default function LibraryPage() {
               onToggleFavorite={(id, current) =>
                 toggleFav.mutate({ id, current })
               }
+              onDelete={(sessionId) => deleteM.mutate(sessionId)}
             />
           ))}
         </div>

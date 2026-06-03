@@ -1,6 +1,6 @@
 import { api } from './api'
 
-export type LibraryItemType = 'manga' | 'book' | 'document' | 'other'
+export type LibraryItemType = 'manga' | 'book' | 'document' | 'video' | 'other'
 
 export interface LibraryCard {
   id: string
