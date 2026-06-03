@@ -24,6 +24,7 @@ const (
 	FileTypeEPUB     FileType = "epub"
 	FileTypeCBZ      FileType = "cbz"
 	FileTypeCBR      FileType = "cbr"
+	FileTypeVideo    FileType = "video"
 	FileTypeUnknown  FileType = "unknown"
 )
 
@@ -84,6 +85,7 @@ const (
 	LibraryTypeManga    LibraryItemType = "manga"
 	LibraryTypeBook     LibraryItemType = "book"
 	LibraryTypeDocument LibraryItemType = "document"
+	LibraryTypeVideo    LibraryItemType = "video"
 	LibraryTypeOther    LibraryItemType = "other"
 )
 
