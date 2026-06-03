@@ -79,6 +79,8 @@ func (h *ReaderHandler) GetPages(c *fiber.Ctx) error {
 
 // StreamFile proxies the full file bytes from the torrent-engine. Forwards
 // the Range header so browsers/PDF.js can seek.
+// For MKV/AVI/WMV files, it proxies through the engine's transmux endpoint
+// which converts to fragmented MP4 on-the-fly via ffmpeg.
 // Mounted at GET /api/v1/stream/:fileId
 func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	userID, ok := middleware.UserID(c)
@@ -93,8 +95,24 @@ func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	if err != nil {
 		return mapTorrentError(err)
 	}
+
+	// MKV/AVI/WMV need transmuxing — browsers can't play them natively
+	if needsTransmux(target.FileType, target.MimeType) {
+		url := fmt.Sprintf("%s/engine/transmux/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
+		return h.proxyUpstream(c, url, "video/mp4", false) // transmux stream is not seekable
+	}
+
 	url := fmt.Sprintf("%s/engine/stream/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
 	return h.proxyUpstream(c, url, target.MimeType, true)
+}
+
+// needsTransmux returns true for video files that may not play natively in
+// browsers. Since we can't reliably detect codec (H.265/HEVC, EAC3, FLAC,
+// DTS, etc.) from the container alone, ALL video files are routed through
+// ffmpeg transmux. The ffmpeg call uses -c:v copy so there's no re-encoding
+// overhead — only the container is repackaged to fMP4.
+func needsTransmux(fileType domain.FileType, _ string) bool {
+	return fileType == domain.FileTypeVideo
 }
 
 // StreamPage is mounted at GET /api/v1/stream/:fileId/:page.
@@ -154,7 +172,7 @@ func (h *ReaderHandler) proxyUpstream(c *fiber.Ctx, url, fallbackMime string, fo
 	}
 	defer resp.Body.Close()
 
-	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
+	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Transfer-Encoding", "Cache-Control"} {
 		if v := resp.Header.Get(k); v != "" {
 			c.Set(k, v)
 		}
