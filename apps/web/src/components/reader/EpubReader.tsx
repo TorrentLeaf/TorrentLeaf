@@ -1,21 +1,23 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import ePub, { type Book, type Rendition } from 'epubjs'
+import { Type, Minus, Plus } from 'lucide-react'
 
 import { pageStreamURL } from '@/lib/reader'
-import { Button } from '@/components/ui/button'
 import { useReadingProgress } from '@/hooks/use-reading-progress'
+import { ReaderShell } from './ReaderShell'
 
 export interface EpubReaderProps {
   sessionId: string
   fileId: string
 }
 
+const FONT_MIN = 80
+const FONT_MAX = 200
+const FONT_STEP = 10
+
 export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
-  const router = useRouter()
   const viewerRef = useRef<HTMLDivElement>(null)
   const bookRef = useRef<Book | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
@@ -23,9 +25,12 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
   const { progress, save } = useReadingProgress(fileId)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [background, setBackground] = useState('#1a1a2e')
+  const [fontSize, setFontSize] = useState(100)
+  const [title, setTitle] = useState('EPUB Reader')
+  const [currentCfi, setCurrentCfi] = useState<string | null>(null)
 
-  // One-shot setup keyed by fileId. We intentionally do NOT re-run on progress
-  // changes — the restored location is applied once via display(lastLocation).
+  // ── Init book ─────────────────────────────────────────
   useEffect(() => {
     const host = viewerRef.current
     if (!host) return
@@ -43,18 +48,38 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
     })
     renditionRef.current = rendition
 
-    // Restore to the saved CFI if available; otherwise start at the book's
-    // first linear section.
-    const startAt = progress?.location && progress.location.length > 0
-      ? progress.location
-      : undefined
-    rendition.display(startAt).then(() => setReady(true)).catch((err: unknown) => {
-      setError((err as Error).message || 'failed to render epub')
+    // Style the book content for dark mode
+    rendition.themes.default({
+      body: {
+        color: '#e0e0e0 !important',
+        'background-color': 'transparent !important',
+      },
+      'a, a:link, a:visited': {
+        color: '#90caf9 !important',
+      },
     })
 
-    // Persist CFI on every relocation, debounced by the hook.
+    const startAt =
+      progress?.location && progress.location.length > 0
+        ? progress.location
+        : undefined
+
+    rendition
+      .display(startAt)
+      .then(() => setReady(true))
+      .catch((err: unknown) => {
+        setError((err as Error).message || 'Failed to render EPUB')
+      })
+
+    // Read metadata for title
+    book.loaded.metadata.then((meta) => {
+      if (meta.title) setTitle(meta.title)
+    })
+
+    // Persist CFI on every relocation
     rendition.on('relocated', (loc: { start: { cfi: string } }) => {
       if (loc?.start?.cfi) {
+        setCurrentCfi(loc.start.cfi)
         save({ currentPage: 0, location: loc.start.cfi })
       }
     })
@@ -65,77 +90,88 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
       bookRef.current = null
       renditionRef.current = null
     }
-    // Disable exhaustive-deps on purpose: we want a single init per fileId.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileId])
 
-  const next = () => renditionRef.current?.next()
-  const prev = () => renditionRef.current?.prev()
-
-  // Arrow-key navigation; wire directly to rendition refs instead of state.
+  // ── Font size changes ─────────────────────────────────
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') next()
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') prev()
-      if (e.key === 'Escape') router.push(`/torrents/${sessionId}` as never)
+    if (renditionRef.current) {
+      renditionRef.current.themes.fontSize(`${fontSize}%`)
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [router, sessionId])
+  }, [fontSize])
+
+  // ── Navigation ────────────────────────────────────────
+  const goNext = useCallback(() => {
+    renditionRef.current?.next()
+  }, [])
+
+  const goPrev = useCallback(() => {
+    renditionRef.current?.prev()
+  }, [])
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-black text-white/50">
+        <div className="text-center space-y-3">
+          <p className="text-sm">Failed to load EPUB</p>
+          <p className="text-xs text-white/30">{error}</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="flex min-h-screen flex-col bg-[hsl(var(--background))] text-[hsl(var(--foreground))]">
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/80 px-4 py-2 backdrop-blur">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.push(`/torrents/${sessionId}` as never)}
-          aria-label="Back"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <span className="text-xs text-[hsl(var(--muted))]">EPUB reader</span>
-      </header>
-
-      <main className="relative flex-1">
-        {error && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-[hsl(var(--destructive))]">
-            {error}
+    <ReaderShell
+      title={title}
+      showModeControls={false}
+      background={background}
+      onBackgroundChange={setBackground}
+      onPrev={goPrev}
+      onNext={goNext}
+      settingsExtra={
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted))]">
+            Font size
+          </h4>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setFontSize((s) => Math.max(s - FONT_STEP, FONT_MIN))}
+              disabled={fontSize <= FONT_MIN}
+              className="rounded-md border border-[hsl(var(--border))] p-1.5 text-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40"
+              aria-label="Decrease font size"
+            >
+              <Minus className="h-4 w-4" />
+            </button>
+            <div className="flex items-center gap-1">
+              <Type className="h-4 w-4 text-[hsl(var(--muted))]" />
+              <span className="min-w-[4ch] text-center text-sm tabular-nums">
+                {fontSize}%
+              </span>
+            </div>
+            <button
+              onClick={() => setFontSize((s) => Math.min(s + FONT_STEP, FONT_MAX))}
+              disabled={fontSize >= FONT_MAX}
+              className="rounded-md border border-[hsl(var(--border))] p-1.5 text-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40"
+              aria-label="Increase font size"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
           </div>
-        )}
+        </div>
+      }
+    >
+      <div className="relative h-full w-full">
         {!ready && !error && (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-[hsl(var(--muted))]">
-            Loading book…
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white/60" />
           </div>
         )}
         <div
           ref={viewerRef}
-          className="mx-auto h-[calc(100vh-7rem)] max-w-4xl"
+          className="mx-auto h-full max-w-4xl"
+          style={{ opacity: ready ? 1 : 0 }}
         />
-        <button
-          type="button"
-          aria-label="Previous page"
-          onClick={prev}
-          className="absolute inset-y-0 left-0 w-1/6 cursor-pointer bg-transparent"
-        />
-        <button
-          type="button"
-          aria-label="Next page"
-          onClick={next}
-          className="absolute inset-y-0 right-0 w-1/6 cursor-pointer bg-transparent"
-        />
-      </main>
-
-      <footer className="sticky bottom-0 z-20 flex items-center justify-center gap-3 border-t border-[hsl(var(--border))] bg-[hsl(var(--background))]/80 px-4 py-2 backdrop-blur">
-        <Button variant="ghost" size="sm" onClick={prev} aria-label="Previous">
-          <ChevronLeft className="mr-1 h-4 w-4" />
-          Prev
-        </Button>
-        <Button variant="ghost" size="sm" onClick={next} aria-label="Next">
-          Next
-          <ChevronRight className="ml-1 h-4 w-4" />
-        </Button>
-      </footer>
-    </div>
+      </div>
+    </ReaderShell>
   )
 }

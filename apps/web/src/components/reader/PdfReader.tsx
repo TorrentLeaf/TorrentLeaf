@@ -1,26 +1,16 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import {
-  ArrowLeft,
-  ChevronLeft,
-  ChevronRight,
-  Maximize,
-  Minimize,
-  Minus,
-  Plus,
-} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   PDFDocumentProxy,
   PDFPageProxy,
 } from 'pdfjs-dist/types/src/display/api'
+import { Minus, Plus } from 'lucide-react'
 
 import { pageStreamURL } from '@/lib/reader'
 import { useAuthStore } from '@/store/auth'
-import { Button } from '@/components/ui/button'
-import { useReaderKeyboard } from '@/hooks/use-reader-keyboard'
 import { useReadingProgress } from '@/hooks/use-reading-progress'
+import { ReaderShell } from './ReaderShell'
 
 export interface PdfReaderProps {
   fileId: string
@@ -30,9 +20,6 @@ const ZOOM_MIN = 0.5
 const ZOOM_MAX = 3
 const ZOOM_STEP = 0.25
 
-// The PDF.js worker ships as an ESM module inside the package. Using
-// `new URL` lets webpack/turbopack emit it as a static asset and generate
-// a hashed URL at build time.
 const workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url,
@@ -41,8 +28,6 @@ const workerSrc = new URL(
 type PdfLib = typeof import('pdfjs-dist')
 
 export function PdfReader({ fileId }: PdfReaderProps) {
-  const router = useRouter()
-  const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const renderTaskRef = useRef<{ cancel: () => void } | null>(null)
 
@@ -52,10 +37,11 @@ export function PdfReader({ fileId }: PdfReaderProps) {
   const [zoom, setZoom] = useState(1.25)
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState(false)
+  const [background, setBackground] = useState('#1e1e1e')
 
   const { progress, save } = useReadingProgress(fileId)
 
-  // Load document (range-request enabled).
+  // ── Load PDF document ─────────────────────────────────
   useEffect(() => {
     let cancelled = false
     let doc: PDFDocumentProxy | null = null
@@ -68,10 +54,6 @@ export function PdfReader({ fileId }: PdfReaderProps) {
         const url = pageStreamURL(fileId)
         const token = useAuthStore.getState().accessToken ?? ''
 
-        // PDF.js attaches these custom headers to every range request it
-        // issues. We also pass ?token= on the URL, which is the mechanism
-        // that actually authenticates the stream — the header is there for
-        // symmetry with the rest of the API.
         const loadingTask = pdfjs.getDocument({
           url,
           httpHeaders: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -99,19 +81,16 @@ export function PdfReader({ fileId }: PdfReaderProps) {
     }
   }, [fileId])
 
-  // Restore saved progress once document is known.
+  // ── Restore saved progress ────────────────────────────
   useEffect(() => {
     if (restored || !pdf || !progress) return
-    if (
-      progress.currentPage > 0 &&
-      progress.currentPage < pdf.numPages
-    ) {
+    if (progress.currentPage > 0 && progress.currentPage < pdf.numPages) {
       setCurrentPage(progress.currentPage + 1) // progress is 0-indexed
     }
     setRestored(true)
   }, [pdf, progress, restored])
 
-  // Render the current page onto the canvas.
+  // ── Render page onto canvas ───────────────────────────
   useEffect(() => {
     if (!pdf || !canvasRef.current) return
     let cancelled = false
@@ -140,23 +119,18 @@ export function PdfReader({ fileId }: PdfReaderProps) {
       try {
         await task.promise
       } catch {
-        // cancelled or failed; ignore
+        // cancelled or failed
       }
     })()
 
-    return () => {
-      cancelled = true
-    }
+    return () => { cancelled = true }
   }, [pdf, currentPage, zoom])
 
+  // ── Persistence ───────────────────────────────────────
   const persist = useCallback(
     (page: number) => {
       if (!pdf) return
-      save({
-        currentPage: page - 1,
-        totalPages: pdf.numPages,
-        readingMode: 'paginated',
-      })
+      save({ currentPage: page - 1, totalPages: pdf.numPages, readingMode: 'paginated' })
     },
     [pdf, save],
   )
@@ -177,138 +151,73 @@ export function PdfReader({ fileId }: PdfReaderProps) {
     })
   }, [persist])
 
-  const zoomIn = useCallback(
-    () => setZoom((z) => Math.min(z + ZOOM_STEP, ZOOM_MAX)),
-    [],
-  )
-  const zoomOut = useCallback(
-    () => setZoom((z) => Math.max(z - ZOOM_STEP, ZOOM_MIN)),
-    [],
-  )
 
-  const toggleFullscreen = useCallback(() => {
-    const el = containerRef.current
-    if (!el) return
-    if (document.fullscreenElement) {
-      document.exitFullscreen().catch(() => {})
-    } else {
-      el.requestFullscreen().catch(() => {})
-    }
-  }, [])
 
-  const escape = useCallback(() => router.back(), [router])
-
-  useReaderKeyboard(
-    useMemo(
-      () => ({
-        onNext: goToNext,
-        onPrev: goToPrev,
-        onToggleFullscreen: toggleFullscreen,
-        onCycleMode: () => {}, // PDF reader is single-mode
-        onEscape: escape,
-      }),
-      [goToNext, goToPrev, toggleFullscreen, escape],
-    ),
-  )
-
-  const [isFullscreen, setIsFullscreen] = useState(false)
-  useEffect(() => {
-    const onChange = () => setIsFullscreen(!!document.fullscreenElement)
-    document.addEventListener('fullscreenchange', onChange)
-    return () => document.removeEventListener('fullscreenchange', onChange)
-  }, [])
-
+  // ── Error state ───────────────────────────────────────
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-[hsl(var(--background))] p-4 text-[hsl(var(--muted))]">
-        <p className="text-sm">{error}</p>
+      <div className="flex min-h-screen items-center justify-center bg-black text-white/50">
+        <div className="text-center space-y-3">
+          <p className="text-sm">Failed to load PDF</p>
+          <p className="text-xs text-white/30">{error}</p>
+        </div>
       </div>
     )
   }
 
+
+
   return (
-    <div
-      ref={containerRef}
-      className="flex min-h-screen flex-col bg-[hsl(var(--background))] text-[hsl(var(--foreground))]"
-    >
-      <header className="sticky top-0 z-20 flex items-center justify-between gap-2 border-b border-[hsl(var(--border))] bg-[hsl(var(--background))]/80 px-4 py-2 backdrop-blur">
-        <Button variant="ghost" size="icon" onClick={escape} aria-label="Back">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-
-        <div className="flex items-center gap-1 text-xs text-[hsl(var(--muted))]">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={zoomOut}
-            aria-label="Zoom out"
-            disabled={zoom <= ZOOM_MIN}
-          >
-            <Minus className="h-4 w-4" />
-          </Button>
-          <span className="min-w-[3ch] text-center tabular-nums">
-            {Math.round(zoom * 100)}%
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={zoomIn}
-            aria-label="Zoom in"
-            disabled={zoom >= ZOOM_MAX}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={toggleFullscreen}
-            aria-label="Toggle fullscreen"
-            title="Fullscreen (F)"
-          >
-            {isFullscreen ? (
-              <Minimize className="h-4 w-4" />
-            ) : (
-              <Maximize className="h-4 w-4" />
-            )}
-          </Button>
+    <ReaderShell
+      title="PDF Reader"
+      pageLabel={totalPages > 0 ? `${currentPage} / ${totalPages}` : undefined}
+      showModeControls={false}
+      background={background}
+      onBackgroundChange={setBackground}
+      onPrev={goToPrev}
+      onNext={goToNext}
+      hasPrev={currentPage > 1}
+      hasNext={currentPage < totalPages}
+      settingsExtra={
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted))]">
+            Zoom
+          </h4>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setZoom((z) => Math.max(z - ZOOM_STEP, ZOOM_MIN))}
+              disabled={zoom <= ZOOM_MIN}
+              className="rounded-md border border-[hsl(var(--border))] p-1.5 text-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40"
+              aria-label="Zoom out"
+            >
+              <Minus className="h-4 w-4" />
+            </button>
+            <span className="min-w-[4ch] text-center text-sm tabular-nums">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              onClick={() => setZoom((z) => Math.min(z + ZOOM_STEP, ZOOM_MAX))}
+              disabled={zoom >= ZOOM_MAX}
+              className="rounded-md border border-[hsl(var(--border))] p-1.5 text-[hsl(var(--muted))] hover:text-[hsl(var(--foreground))] disabled:opacity-40"
+              aria-label="Zoom in"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
         </div>
-      </header>
-
-      <main className="flex flex-1 items-start justify-center overflow-auto p-4">
+      }
+    >
+      <div className="flex h-full items-start justify-center overflow-auto p-4">
         {pdf ? (
           <canvas
             ref={canvasRef}
-            className="rounded-sm shadow-sm"
+            className="rounded shadow-lg"
             aria-label={`Page ${currentPage} of ${totalPages}`}
           />
         ) : (
-          <div className="mt-8 h-[70vh] w-full max-w-3xl animate-pulse rounded-sm bg-[hsl(var(--surface-2))]" />
+          <div className="mt-8 h-[70vh] w-full max-w-3xl animate-pulse rounded bg-white/5" />
         )}
-      </main>
-
-      <footer className="sticky bottom-0 z-20 flex items-center justify-center gap-3 border-t border-[hsl(var(--border))] bg-[hsl(var(--background))]/80 px-4 py-2 text-xs text-[hsl(var(--muted))] backdrop-blur">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={goToPrev}
-          aria-label="Previous page"
-          disabled={currentPage <= 1}
-        >
-          <ChevronLeft className="h-4 w-4" />
-        </Button>
-        <span className="tabular-nums">
-          {currentPage} / {totalPages || '—'}
-        </span>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={goToNext}
-          aria-label="Next page"
-          disabled={currentPage >= totalPages}
-        >
-          <ChevronRight className="h-4 w-4" />
-        </Button>
-      </footer>
-    </div>
+      </div>
+    </ReaderShell>
   )
 }
