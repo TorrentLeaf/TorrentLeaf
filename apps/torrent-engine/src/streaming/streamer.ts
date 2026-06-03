@@ -1,6 +1,10 @@
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { existsSync, createReadStream, statSync } from 'fs'
+import { join } from 'path'
 import { engine } from '../torrent/engine.js'
 import { detectMime } from '../files/detector.js'
+import { config } from '../config.js'
+import { logger } from '../logger.js'
 
 interface ParsedRange {
   start: number
@@ -30,6 +34,22 @@ export function parseRange(header: string, total: number): ParsedRange | null {
   return { start, end }
 }
 
+/**
+ * Resolve the absolute path of a torrent file on disk.
+ * Returns null if the file does not exist or has zero size.
+ */
+function resolveDiskPath(file: { path: string }): string | null {
+  const filePath = join(config.downloadPath, file.path)
+  if (!existsSync(filePath)) return null
+  try {
+    const stat = statSync(filePath)
+    if (stat.size === 0) return null
+    return filePath
+  } catch {
+    return null
+  }
+}
+
 export async function streamFile(
   req: FastifyRequest<{ Params: { infoHash: string; fileIndex: string } }>,
   reply: FastifyReply,
@@ -48,38 +68,61 @@ export async function streamFile(
     return
   }
 
+  // Prioritize this file for download
   file.select(1)
 
   const mime = detectMime(file.name)
-  const total = file.length
   const rangeHeader = req.headers.range
 
-  if (rangeHeader) {
-    const parsed = parseRange(rangeHeader, total)
-    if (!parsed) {
-      reply.status(416).header('Content-Range', `bytes */${total}`).send()
-      return
-    }
-    const { start, end } = parsed
-    reply
-      .status(206)
-      .headers({
+  // ── Strategy: prefer disk read over webtorrent stream ──────────
+  // When a torrent is re-added via reseed, webtorrent's createReadStream()
+  // may return empty even though the data is fully on disk. Reading directly
+  // from the filesystem solves this for completed downloads.
+  const diskPath = resolveDiskPath(file)
+
+  if (diskPath) {
+    const stat = statSync(diskPath)
+    const total = stat.size
+
+    // Use reply.raw to bypass Fastify's stream handling that overrides Content-Length
+    reply.hijack()
+
+    if (rangeHeader) {
+      const parsed = parseRange(rangeHeader, total)
+      if (!parsed) {
+        reply.raw.writeHead(416, { 'Content-Range': `bytes */${total}` })
+        reply.raw.end()
+        return
+      }
+      const { start, end } = parsed
+      reply.raw.writeHead(206, {
         'Content-Range': `bytes ${start}-${end}/${total}`,
         'Accept-Ranges': 'bytes',
-        'Content-Length': String(end - start + 1),
+        'Content-Length': end - start + 1,
         'Content-Type': mime,
         'Cache-Control': 'public, max-age=3600',
       })
-      .send(file.createReadStream({ start, end }))
-    return
-  }
+      createReadStream(diskPath, { start, end: end + 1 }).pipe(reply.raw)
+      return
+    }
 
-  reply
-    .status(200)
-    .headers({
-      'Content-Length': String(total),
+    reply.raw.writeHead(200, {
+      'Content-Length': total,
       'Accept-Ranges': 'bytes',
       'Content-Type': mime,
+      'Cache-Control': 'public, max-age=3600',
     })
-    .send(file.createReadStream())
+    createReadStream(diskPath).pipe(reply.raw)
+    return
+  }
+  // ── File not on disk — still downloading ────────────────────────
+  // After engine reseed, webtorrent's createReadStream() returns empty data
+  // even when progress=1. The only reliable way to stream is from disk.
+  // Tell the client to retry later.
+  file.select(2) // boost priority so it downloads faster
+  logger.info({ filePath: file.path, progress: torrent.progress }, 'stream: file not on disk, returning 503')
+  reply
+    .status(503)
+    .header('Retry-After', '5')
+    .send({ error: 'file is still downloading', progress: torrent.progress })
 }

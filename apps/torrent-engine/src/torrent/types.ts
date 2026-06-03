@@ -1,4 +1,4 @@
-export type FileType = 'image' | 'pdf' | 'epub' | 'cbz' | 'cbr' | 'zip' | 'unknown'
+export type FileType = 'image' | 'pdf' | 'epub' | 'cbz' | 'cbr' | 'zip' | 'video' | 'unknown'
 
 export interface FileInfo {
   index: number

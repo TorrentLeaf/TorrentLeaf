@@ -14,6 +14,14 @@ const EXT_TO_TYPE: Record<string, FileType> = {
   '.cbz': 'cbz',
   '.cbr': 'cbr',
   '.zip': 'zip',
+  '.mp4': 'video',
+  '.mkv': 'video',
+  '.avi': 'video',
+  '.webm': 'video',
+  '.mov': 'video',
+  '.flv': 'video',
+  '.m4v': 'video',
+  '.wmv': 'video',
 }
 
 const EXT_TO_MIME: Record<string, string> = {
@@ -28,6 +36,14 @@ const EXT_TO_MIME: Record<string, string> = {
   '.cbz': 'application/vnd.comicbook+zip',
   '.cbr': 'application/vnd.comicbook-rar',
   '.zip': 'application/zip',
+  '.mp4': 'video/mp4',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.flv': 'video/x-flv',
+  '.m4v': 'video/mp4',
+  '.wmv': 'video/x-ms-wmv',
 }
 
 const BLOCKED_EXTENSIONS = new Set([
