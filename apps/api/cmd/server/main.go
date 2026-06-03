@@ -37,6 +37,7 @@ type deps struct {
 	progressSvc   service.ProgressService
 	librarySvc    service.LibraryService
 	adminSvc      service.AdminService
+	settingsSvc   service.SettingsService
 	redis         *redis.Client
 	engineURL     string
 	webhookSecret string
@@ -82,12 +83,14 @@ func main() {
 	progressRepo := repository.NewProgressRepository(pool)
 	libraryRepo := repository.NewLibraryRepository(pool)
 	favoritesRepo := repository.NewFavoritesRepository(pool)
+	settingsRepo := repository.NewSettingsRepository(pool)
 	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
-	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, libraryRepo, engineClient)
+	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, libraryRepo, settingsRepo, engineClient)
 	readerSvc := service.NewReaderService(sessionRepo, fileRepo, engineClient)
 	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
 	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)
 	adminSvc := service.NewAdminService(sessionRepo, engineClient)
+	settingsSvc := service.NewSettingsService(settingsRepo)
 
 	app := newApp(log, cfg)
 	registerRoutes(app, deps{
@@ -98,6 +101,7 @@ func main() {
 		progressSvc:   progressSvc,
 		librarySvc:    librarySvc,
 		adminSvc:      adminSvc,
+		settingsSvc:   settingsSvc,
 		redis:         redisClient.Client,
 		engineURL:     cfg.TorrentEngineURL,
 		webhookSecret: cfg.APIWebhookSecret,
@@ -105,6 +109,17 @@ func main() {
 		accessTTL:     cfg.JWTAccessTTL,
 		refreshTTL:    cfg.JWTRefreshTTL,
 	})
+
+	// Re-add all active torrents to the engine on startup. This recovers
+	// from engine restarts (the engine stores no state in-process). We run
+	// this in a goroutine so it doesn't block the HTTP listener.
+	go func() {
+		if err := torrentSvc.ReseedEngine(context.Background()); err != nil {
+			log.Warn().Err(err).Msg("engine reseed completed with errors")
+		} else {
+			log.Info().Msg("engine reseed completed successfully")
+		}
+	}()
 
 	go func() {
 		addr := ":" + cfg.Port
@@ -254,4 +269,8 @@ func registerRoutes(app *fiber.App, d deps) {
 	adminGroup.Post("/torrents/:id/pause", admin.PauseTorrent)
 	adminGroup.Post("/torrents/:id/resume", admin.ResumeTorrent)
 	adminGroup.Delete("/torrents/:id", admin.DeleteTorrent)
+
+	settings := handler.NewSettingsHandler(d.log, d.settingsSvc)
+	protected.Get("/settings", settings.Get)
+	protected.Put("/settings", settings.Update)
 }

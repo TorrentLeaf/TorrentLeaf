@@ -42,7 +42,7 @@ export class TorrentManager {
    * If the torrent is already ready, returns full status with files.
    * Otherwise returns a minimal status — the metadata webhook fires later.
    */
-  add(magnetURI: string): TorrentStatus {
+  add(magnetURI: string, downloadPath?: string): TorrentStatus {
     if (magnetURI.length > MAGNET_MAX_LEN) {
       throw new Error('magnet uri too long')
     }
@@ -54,7 +54,7 @@ export class TorrentManager {
       throw new Error(`max torrents reached (${config.maxTorrents})`)
     }
 
-    const torrent = engine.add(magnetURI)
+    const torrent = engine.add(magnetURI, downloadPath)
 
     if (torrent.ready && torrent.infoHash) {
       logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent already ready')

@@ -64,15 +64,19 @@ class TorrentEngine {
   /**
    * Add a torrent. Returns immediately — does NOT wait for metadata.
    * The caller should listen for the 'ready' event separately if needed.
+   * @param downloadPath — optional per-torrent download directory; falls back
+   *                       to the global config.downloadPath.
    */
-  add(magnetURI: string): WTTorrent {
+  add(magnetURI: string, downloadPath?: string): WTTorrent {
     const existing = this.findByMagnet(magnetURI)
     if (existing) return existing
+
+    const effectivePath = downloadPath ?? config.downloadPath
 
     let torrent: WTTorrent | null = null
     try {
       torrent = this.client.add(magnetURI, {
-        path: config.downloadPath,
+        path: effectivePath,
         maxConns: config.maxConnsPerTorrent,
       })
     } catch (err) {
@@ -86,7 +90,7 @@ class TorrentEngine {
     }
 
     logger.info(
-      { ready: torrent.ready, infoHash: torrent.infoHash ?? '(pending)' },
+      { ready: torrent.ready, infoHash: torrent.infoHash ?? '(pending)', path: effectivePath },
       'torrent added to client',
     )
     return torrent

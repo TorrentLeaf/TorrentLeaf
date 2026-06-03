@@ -39,7 +39,7 @@ func Load() (*Config, error) {
 		TorrentEngineURL: os.Getenv("TORRENT_ENGINE_URL"),
 		JWTSecret:        os.Getenv("JWT_SECRET"),
 		JWTRefreshSecret: os.Getenv("JWT_REFRESH_SECRET"),
-		JWTAccessTTL:     parseDuration(getenv("JWT_ACCESS_TTL", "15m")),
+		JWTAccessTTL:     parseDuration(getenv("JWT_ACCESS_TTL", "2h")),
 		JWTRefreshTTL:    parseDuration(getenv("JWT_REFRESH_TTL", "168h")),
 		MinioEndpoint:    os.Getenv("MINIO_ENDPOINT"),
 		MinioAccessKey:   os.Getenv("MINIO_ACCESS_KEY"),
