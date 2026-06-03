@@ -87,6 +87,17 @@ func (r *fakeLibraryRepo) UpdateTitleBySession(_ context.Context, sessionID uuid
 	return nil
 }
 
+func (r *fakeLibraryRepo) UpdateTypeBySession(_ context.Context, sessionID uuid.UUID, itemType domain.LibraryItemType) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, item := range r.items {
+		if item.SessionID == sessionID {
+			item.Type = itemType
+		}
+	}
+	return nil
+}
+
 // ─── fake favorites repo ────────────────────────────────────────────────────
 
 type fakeFavoritesRepo struct {

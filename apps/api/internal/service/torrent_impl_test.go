@@ -33,7 +33,9 @@ func newFakeTorrentRepo() *fakeTorrentRepo {
 func (r *fakeTorrentRepo) Create(_ context.Context, s domain.TorrentSession) (*domain.TorrentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if _, ok := r.byHash[s.InfoHash]; ok {
+	// Unique constraint is now (user_id, info_hash) not just info_hash
+	key := s.UserID.String() + ":" + s.InfoHash
+	if _, ok := r.byHash[key]; ok {
 		return nil, domain.NewError(domain.ErrConflict, "torrent already added", nil)
 	}
 	s.ID = uuid.New()
@@ -41,7 +43,7 @@ func (r *fakeTorrentRepo) Create(_ context.Context, s domain.TorrentSession) (*d
 	s.UpdatedAt = s.CreatedAt
 	cp := s
 	r.sessions[s.ID] = &cp
-	r.byHash[s.InfoHash] = &cp
+	r.byHash[key] = &cp
 	return &cp, nil
 }
 
@@ -58,7 +60,19 @@ func (r *fakeTorrentRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Torr
 func (r *fakeTorrentRepo) GetByInfoHash(_ context.Context, h string) (*domain.TorrentSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s, ok := r.byHash[h]
+	for _, s := range r.sessions {
+		if s.InfoHash == h {
+			return s, nil
+		}
+	}
+	return nil, domain.NewError(domain.ErrNotFound, "not found", nil)
+}
+
+func (r *fakeTorrentRepo) GetByUserAndInfoHash(_ context.Context, userID uuid.UUID, h string) (*domain.TorrentSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := userID.String() + ":" + h
+	s, ok := r.byHash[key]
 	if !ok {
 		return nil, domain.NewError(domain.ErrNotFound, "not found", nil)
 	}
@@ -101,13 +115,19 @@ func (r *fakeTorrentRepo) UpdateStatus(_ context.Context, id uuid.UUID, st domai
 func (r *fakeTorrentRepo) UpdateMetadata(_ context.Context, hash, name string, total int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	s, ok := r.byHash[hash]
-	if !ok {
+	// byHash is keyed by userID:hash, so iterate to update every user's row.
+	found := false
+	for _, s := range r.sessions {
+		if s.InfoHash == hash {
+			s.Name = name
+			s.TotalSize = total
+			s.Status = domain.StatusDownloading
+			found = true
+		}
+	}
+	if !found {
 		return domain.NewError(domain.ErrNotFound, "not found", nil)
 	}
-	s.Name = name
-	s.TotalSize = total
-	s.Status = domain.StatusDownloading
 	return nil
 }
 
@@ -119,7 +139,7 @@ func (r *fakeTorrentRepo) Delete(_ context.Context, id uuid.UUID) error {
 		return domain.NewError(domain.ErrNotFound, "not found", nil)
 	}
 	delete(r.sessions, id)
-	delete(r.byHash, s.InfoHash)
+	delete(r.byHash, s.UserID.String()+":"+s.InfoHash)
 	return nil
 }
 
@@ -168,6 +188,41 @@ func (r *fakeFileRepo) UpdatePriority(_ context.Context, _ uuid.UUID, _ int) err
 	return nil
 }
 
+// ─── Settings fake ────────────────────────────────────────────────────────────
+
+type fakeSettingsRepo struct {
+	mu       sync.Mutex
+	settings map[uuid.UUID]*domain.UserSettings
+}
+
+func newFakeSettingsRepo() *fakeSettingsRepo {
+	return &fakeSettingsRepo{settings: map[uuid.UUID]*domain.UserSettings{}}
+}
+
+func (r *fakeSettingsRepo) GetByUserID(_ context.Context, userID uuid.UUID) (*domain.UserSettings, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.settings[userID]; ok {
+		cp := *s
+		return &cp, nil
+	}
+	s := &domain.UserSettings{ID: uuid.New(), UserID: userID}
+	r.settings[userID] = s
+	cp := *s
+	return &cp, nil
+}
+
+func (r *fakeSettingsRepo) Upsert(_ context.Context, s domain.UserSettings) (*domain.UserSettings, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s.ID == uuid.Nil {
+		s.ID = uuid.New()
+	}
+	cp := s
+	r.settings[s.UserID] = &cp
+	return &cp, nil
+}
+
 // ─── Engine fake ──────────────────────────────────────────────────────────────
 
 type fakeEngine struct {
@@ -182,7 +237,7 @@ type fakeEngine struct {
 	archiveErr     error
 }
 
-func (e *fakeEngine) Add(_ context.Context, magnet string) (EngineTorrentStatus, error) {
+func (e *fakeEngine) Add(_ context.Context, magnet string, _ string) (EngineTorrentStatus, error) {
 	e.addCalls = append(e.addCalls, magnet)
 	if e.addErr != nil {
 		return EngineTorrentStatus{}, e.addErr
@@ -221,8 +276,9 @@ func newTestTorrentSvc() (TorrentService, *fakeTorrentRepo, *fakeFileRepo, *fake
 	sr := newFakeTorrentRepo()
 	fr := newFakeFileRepo()
 	lr := newFakeLibraryRepo()
+	stRepo := newFakeSettingsRepo()
 	e := &fakeEngine{}
-	return NewTorrentService(sr, fr, lr, e), sr, fr, e
+	return NewTorrentService(sr, fr, lr, stRepo, e), sr, fr, e
 }
 
 func TestAddRejectsInvalidMagnet(t *testing.T) {
@@ -276,15 +332,28 @@ func TestAddIsIdempotentForSameUser(t *testing.T) {
 	}
 }
 
-func TestAddConflictAcrossUsers(t *testing.T) {
-	svc, _, _, _ := newTestTorrentSvc()
-	if _, err := svc.Add(context.Background(), uuid.New(), validMagnet); err != nil {
+func TestAddAcrossUsersSucceeds(t *testing.T) {
+	svc, _, _, e := newTestTorrentSvc()
+	user1 := uuid.New()
+	user2 := uuid.New()
+
+	s1, err := svc.Add(context.Background(), user1, validMagnet)
+	if err != nil {
 		t.Fatalf("first add: %v", err)
 	}
-	_, err := svc.Add(context.Background(), uuid.New(), validMagnet)
-	var de *domain.Error
-	if !errors.As(err, &de) || de.Code != domain.ErrConflict {
-		t.Fatalf("expected ErrConflict, got %v", err)
+	s2, err := svc.Add(context.Background(), user2, validMagnet)
+	if err != nil {
+		t.Fatalf("second add should succeed for different user: %v", err)
+	}
+	if s1.ID == s2.ID {
+		t.Errorf("sessions should be distinct for different users")
+	}
+	if s1.InfoHash != s2.InfoHash {
+		t.Errorf("both sessions should share the same info hash")
+	}
+	// Engine.Add should be called twice (once per user)
+	if len(e.addCalls) != 2 {
+		t.Errorf("engine.Add should be called %d times, got %d", 2, len(e.addCalls))
 	}
 }
 
@@ -305,7 +374,8 @@ func TestAddAutoShelvesToLibrary(t *testing.T) {
 	sr := newFakeTorrentRepo()
 	fr := newFakeFileRepo()
 	lr := newFakeLibraryRepo()
-	svc := NewTorrentService(sr, fr, lr, &fakeEngine{})
+	stRepo := newFakeSettingsRepo()
+	svc := NewTorrentService(sr, fr, lr, stRepo, &fakeEngine{})
 	userID := uuid.New()
 
 	session, err := svc.Add(context.Background(), userID, validMagnet)

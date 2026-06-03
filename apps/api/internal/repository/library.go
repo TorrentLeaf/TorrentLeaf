@@ -36,6 +36,10 @@ type LibraryRepository interface {
 	// pointing at this session. Used when metadata arrives and we finally know
 	// the torrent's real name (initial inserts use the infoHash as placeholder).
 	UpdateTitleBySession(ctx context.Context, sessionID uuid.UUID, title string) error
+	// UpdateTypeBySession sets the content_type for the library item linked
+	// to the given torrent session. Called after metadata arrives and the
+	// dominant file type has been inferred.
+	UpdateTypeBySession(ctx context.Context, sessionID uuid.UUID, itemType domain.LibraryItemType) error
 }
 
 type FavoritesRepository interface {

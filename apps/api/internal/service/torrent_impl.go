@@ -19,6 +19,7 @@ type torrentService struct {
 	sessions repository.TorrentRepository
 	files    repository.TorrentFileRepository
 	library  repository.LibraryRepository
+	settings repository.SettingsRepository
 	engine   EngineClient
 }
 
@@ -26,9 +27,10 @@ func NewTorrentService(
 	sessions repository.TorrentRepository,
 	files repository.TorrentFileRepository,
 	library repository.LibraryRepository,
+	settings repository.SettingsRepository,
 	engine EngineClient,
 ) TorrentService {
-	return &torrentService{sessions: sessions, files: files, library: library, engine: engine}
+	return &torrentService{sessions: sessions, files: files, library: library, settings: settings, engine: engine}
 }
 
 // maxMagnetURILength bounds the magnet URI an API client may submit. The
@@ -48,13 +50,10 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	}
 	infoHash := strings.ToLower(m[1])
 
-	// Idempotent re-add: if the user already owns a session for this hash,
+	// Idempotent re-add: if THIS user already owns a session for this hash,
 	// return it instead of creating a duplicate.
-	if existing, err := s.sessions.GetByInfoHash(ctx, infoHash); err == nil {
-		if existing.UserID == userID {
-			return existing, nil
-		}
-		return nil, domain.NewError(domain.ErrConflict, "torrent already added by another user", nil)
+	if existing, err := s.sessions.GetByUserAndInfoHash(ctx, userID, infoHash); err == nil {
+		return existing, nil
 	} else if !isNotFound(err) {
 		return nil, err
 	}
@@ -73,7 +72,14 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	// we roll back the DB row so the user can retry cleanly. The underlying
 	// error is wrapped (not exposed) so upstream URLs / connection strings
 	// never leak into the API response.
-	if _, err := s.engine.Add(ctx, magnetURI); err != nil {
+	// Fetch the user's download path from settings (best-effort; fallback to
+	// engine default if settings lookup fails).
+	downloadPath := ""
+	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
+		downloadPath = userSettings.DownloadPath
+	}
+
+	if _, err := s.engine.Add(ctx, magnetURI, downloadPath); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
 		return nil, domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
 	}
@@ -165,7 +171,7 @@ func (s *torrentService) ApplyMetadata(
 			Path:      f.Path,
 			Length:    f.Length,
 			MimeType:  f.MimeType,
-			FileType:  normalizeFileType(f.FileType),
+			FileType:  normalizeFileTypeWithName(f.FileType, f.Name),
 			Priority:  1,
 		})
 	}
@@ -174,6 +180,12 @@ func (s *torrentService) ApplyMetadata(
 	}
 	if err := s.sessions.UpdateMetadata(ctx, infoHash, name, totalSize); err != nil {
 		return err
+	}
+	// Infer the library item type from the dominant file type.
+	inferredType := inferLibraryType(domainFiles)
+	if err := s.library.UpdateTypeBySession(ctx, session.ID, inferredType); err != nil {
+		// Non-critical — log but don't fail the metadata update.
+		_ = err
 	}
 	if name != "" {
 		if err := s.library.UpdateTitleBySession(ctx, session.ID, name); err != nil {
@@ -195,9 +207,79 @@ func normalizeFileType(t string) domain.FileType {
 		return domain.FileTypeCBZ
 	case "cbr":
 		return domain.FileTypeCBR
+	case "video":
+		return domain.FileTypeVideo
 	default:
 		return domain.FileTypeUnknown
 	}
+}
+
+// normalizeFileTypeWithName falls back to file extension detection when the
+// engine reports "unknown". This prevents video/image files from being
+// permanently stored as "unknown" if the engine's detector missed them.
+func normalizeFileTypeWithName(t, name string) domain.FileType {
+	ft := normalizeFileType(t)
+	if ft != domain.FileTypeUnknown {
+		return ft
+	}
+	// Fallback: detect by extension
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".mkv"), strings.HasSuffix(lower, ".mp4"),
+		strings.HasSuffix(lower, ".avi"), strings.HasSuffix(lower, ".wmv"),
+		strings.HasSuffix(lower, ".flv"), strings.HasSuffix(lower, ".webm"),
+		strings.HasSuffix(lower, ".mov"), strings.HasSuffix(lower, ".m4v"):
+		return domain.FileTypeVideo
+	case strings.HasSuffix(lower, ".jpg"), strings.HasSuffix(lower, ".jpeg"),
+		strings.HasSuffix(lower, ".png"), strings.HasSuffix(lower, ".gif"),
+		strings.HasSuffix(lower, ".webp"):
+		return domain.FileTypeImage
+	case strings.HasSuffix(lower, ".pdf"):
+		return domain.FileTypePDF
+	case strings.HasSuffix(lower, ".epub"):
+		return domain.FileTypeEPUB
+	case strings.HasSuffix(lower, ".cbz"):
+		return domain.FileTypeCBZ
+	case strings.HasSuffix(lower, ".cbr"):
+		return domain.FileTypeCBR
+	}
+	return domain.FileTypeUnknown
+}
+
+// inferLibraryType determines the library item content type from the dominant
+// file type among the torrent's files.
+func inferLibraryType(files []domain.TorrentFile) domain.LibraryItemType {
+	counts := make(map[domain.FileType]int)
+	for _, f := range files {
+		counts[f.FileType]++
+	}
+
+	// Manga-like: images, CBZ, CBR
+	mangaCount := counts[domain.FileTypeImage] + counts[domain.FileTypeCBZ] + counts[domain.FileTypeCBR]
+	epubCount := counts[domain.FileTypeEPUB]
+	pdfCount := counts[domain.FileTypePDF]
+	videoCount := counts[domain.FileTypeVideo]
+
+	max := mangaCount
+	result := domain.LibraryTypeManga
+
+	if epubCount > max {
+		max = epubCount
+		result = domain.LibraryTypeBook
+	}
+	if pdfCount > max {
+		max = pdfCount
+		result = domain.LibraryTypeDocument
+	}
+	if videoCount > max {
+		max = videoCount
+		result = domain.LibraryTypeVideo
+	}
+
+	if max == 0 {
+		return domain.LibraryTypeOther
+	}
+	return result
 }
 
 func isNotFound(err error) bool {
@@ -213,3 +295,41 @@ func InfoHashFromMagnet(magnetURI string) (string, error) {
 	}
 	return strings.ToLower(m[1]), nil
 }
+
+// ReseedEngine re-adds all active torrents to the engine. This is
+// called at API startup to recover from engine restarts (the engine
+// stores no state and loses all torrents on process exit).
+func (s *torrentService) ReseedEngine(ctx context.Context) error {
+	sessions, err := s.sessions.ListAll(ctx)
+	if err != nil {
+		return fmt.Errorf("reseed: list sessions: %w", err)
+	}
+
+	var added, skipped, failed int
+	for _, sess := range sessions {
+		// Only re-add torrents that were actively downloading/seeding.
+		if sess.Status == domain.StatusPaused || sess.MagnetURI == "" {
+			skipped++
+			continue
+		}
+
+		// Fetch the user's download path (best-effort; use default on error).
+		downloadPath := ""
+		if userSettings, settErr := s.settings.GetByUserID(ctx, sess.UserID); settErr == nil {
+			downloadPath = userSettings.DownloadPath
+		}
+
+		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath); err != nil {
+			failed++
+			continue
+		}
+		added++
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("reseed: added %d, skipped %d, failed %d/%d",
+			added, skipped, failed, len(sessions))
+	}
+	return nil
+}
+

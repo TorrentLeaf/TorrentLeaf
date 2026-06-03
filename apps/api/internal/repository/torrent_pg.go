@@ -51,6 +51,19 @@ func (r *torrentRepo) GetByInfoHash(ctx context.Context, infoHash string) (*doma
 	return r.getBy(ctx, "info_hash = $1", infoHash)
 }
 
+func (r *torrentRepo) GetByUserAndInfoHash(ctx context.Context, userID uuid.UUID, infoHash string) (*domain.TorrentSession, error) {
+	q := "SELECT " + torrentSessionColumns + " FROM torrent_sessions WHERE user_id = $1 AND info_hash = $2 LIMIT 1"
+	row := r.pool.QueryRow(ctx, q, userID, infoHash)
+	s, err := scanTorrentSession(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.NewError(domain.ErrNotFound, "torrent session not found", err)
+		}
+		return nil, fmt.Errorf("get torrent session by user+hash: %w", err)
+	}
+	return s, nil
+}
+
 func (r *torrentRepo) ListByUser(ctx context.Context, userID uuid.UUID) ([]domain.TorrentSession, error) {
 	q := "SELECT " + torrentSessionColumns +
 		" FROM torrent_sessions WHERE user_id = $1 ORDER BY created_at DESC"
