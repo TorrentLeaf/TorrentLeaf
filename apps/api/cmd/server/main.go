@@ -233,6 +233,10 @@ func registerRoutes(app *fiber.App, d deps) {
 	// stay authenticated.
 	api.Get("/probe/:fileId", middleware.RequireAuthWS(d.authSvc), reader.ProbeFile)
 	api.Get("/subtitles/:fileId/:streamIndex", middleware.RequireAuthWS(d.authSvc), reader.StreamSubtitle)
+	// On-demand HLS for videos that need re-encoding (HEVC etc.): near-instant
+	// start + seeking via lazily-encoded segments. Token via ?token= query.
+	api.Get("/hls/:fileId/playlist.m3u8", middleware.RequireAuthWS(d.authSvc), reader.HLSPlaylist)
+	api.Get("/hls/:fileId/seg/:seg", middleware.RequireAuthWS(d.authSvc), reader.HLSSegment)
 
 	// All routes below require a valid access token (cookie or bearer header)
 	// plus a per-user rate limit. The limiter sits after RequireAuth so it

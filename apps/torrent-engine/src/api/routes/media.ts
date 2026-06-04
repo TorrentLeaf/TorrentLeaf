@@ -3,6 +3,7 @@ import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { engine, type WTTorrent, type WTFile } from '../../torrent/engine.js'
+import { probeVideo, videoNeedsTranscode } from '../../files/video.js'
 import { logger } from '../../logger.js'
 
 /**
@@ -27,6 +28,9 @@ interface ProbeStream {
 interface MediaInfo {
   audio: ProbeStream[]
   subtitles: ProbeStream[]
+  // true when the video stream needs re-encoding → the player should use the
+  // HLS path (/hls/...) instead of the single-file MP4 transmux stream.
+  transcode: boolean
 }
 
 function resolveOnDisk(infoHash: string, fileIndexStr: string):
@@ -97,12 +101,16 @@ export async function registerMediaRoutes(app: FastifyInstance): Promise<void> {
         reply.status(r.status).header('Retry-After', '5').send({ error: r.message })
         return
       }
-      const streams = await ffprobeStreams(r.path)
+      const [streams, vprobe] = await Promise.all([
+        ffprobeStreams(r.path),
+        probeVideo(r.path),
+      ])
       const info: MediaInfo = {
         audio: streams.filter((s) => s.codec_type === 'audio').map(toProbeStream),
         subtitles: streams
           .filter((s) => s.codec_type === 'subtitle' && TEXT_SUB_CODECS.has(s.codec_name ?? ''))
           .map(toProbeStream),
+        transcode: videoNeedsTranscode(vprobe),
       }
       reply.send(info)
     },

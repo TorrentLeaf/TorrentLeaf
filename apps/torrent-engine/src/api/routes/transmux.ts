@@ -1,65 +1,150 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
-import { existsSync, statSync } from 'fs'
-import { join } from 'path'
+import { existsSync, statSync, mkdirSync, renameSync, createReadStream, unlink } from 'fs'
+import { join, dirname } from 'path'
 import { spawn } from 'child_process'
 import { engine } from '../../torrent/engine.js'
+import { config } from '../../config.js'
+import { parseRange } from '../../streaming/streamer.js'
+import { probeVideo, videoArgs } from '../../files/video.js'
 import { logger } from '../../logger.js'
 
 /**
  * /engine/transmux/:infoHash/:fileIndex
  *
- * Repackages (and, when needed, re-encodes) a video file into fragmented
- * MP4 on-the-fly via ffmpeg so the browser can play it in a <video> element.
+ * Repackages (and, when needed, re-encodes) a video file into a *complete,
+ * seekable* MP4 via ffmpeg, caches it on disk, and serves it with HTTP Range
+ * support so the browser gets a real duration and instant seeking.
+ *
+ * Why not stream ffmpeg.stdout live? A live fragmented-MP4 pipe has no moov
+ * duration (the player's total time grows as bytes arrive) and no Range
+ * support (any seek or buffer underrun forces the player to reopen the
+ * stream, restarting ffmpeg from t=0 — which stalls). Transcoding once to a
+ * faststart MP4 fixes both: known duration + native seeking + no re-encode
+ * on every request.
+ *
+ * Flow on a cache miss: kick off ffmpeg writing to `<cache>.part`, return
+ * 503 + Retry-After, and let the client poll until the file is ready (same
+ * contract as the still-downloading case). On success the `.part` is renamed
+ * atomically to its final name; subsequent requests serve it via Range.
  *
  * Source codec is probed first: 8-bit H.264 is copied as-is (zero-CPU);
  * everything else (HEVC/H.265, VP9, AV1, 10-bit H.264 like Hi10P) is
- * re-encoded to baseline H.264 because no major browser plays those codecs
- * inside MP4. Audio is always re-encoded to AAC for the same reason
- * (handles EAC3/DTS/FLAC sources).
+ * re-encoded to baseline H.264. Audio is always re-encoded to AAC (handles
+ * EAC3/DTS/FLAC sources).
  */
 
-interface VideoProbe {
-  codec: string | null
-  pixFmt: string | null
+// In-flight transcodes keyed by cache filename, so concurrent requests for
+// the same output don't spawn duplicate ffmpeg processes.
+const inProgress = new Set<string>()
+
+/** Absolute path of the cached transcode for a given file + audio track. */
+function cachePathFor(infoHash: string, fileIndex: number, audioIdx: number | null): string {
+  const audioKey = audioIdx !== null ? `a${audioIdx}` : 'adef'
+  return join(config.downloadPath, '.transcode', `${infoHash}.${fileIndex}.${audioKey}.mp4`)
 }
 
-function probeVideo(filePath: string): Promise<VideoProbe> {
-  return new Promise((resolve) => {
-    const proc = spawn('ffprobe', [
-      '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_name,pix_fmt',
-      '-of', 'json',
-      filePath,
-    ])
-    let out = ''
-    proc.stdout.on('data', (d: Buffer) => {
-      out += d.toString()
-    })
-    proc.on('close', () => {
-      try {
-        const j = JSON.parse(out)
-        const s = j.streams?.[0] ?? {}
-        resolve({ codec: s.codec_name ?? null, pixFmt: s.pix_fmt ?? null })
-      } catch {
-        resolve({ codec: null, pixFmt: null })
-      }
-    })
-    proc.on('error', () => resolve({ codec: null, pixFmt: null }))
-  })
-}
+/** Serve a complete file on disk with Range support (mirrors the streamer). */
+function serveWithRange(reply: FastifyReply, rangeHeader: string | undefined, filePath: string): void {
+  const total = statSync(filePath).size
+  reply.hijack()
 
-function videoArgs(probe: VideoProbe): string[] {
-  const browserSafePixFmts = new Set(['yuv420p', 'yuvj420p'])
-  if (probe.codec === 'h264' && probe.pixFmt !== null && browserSafePixFmts.has(probe.pixFmt)) {
-    return ['-c:v', 'copy']
+  if (rangeHeader) {
+    const parsed = parseRange(rangeHeader, total)
+    if (!parsed) {
+      reply.raw.writeHead(416, { 'Content-Range': `bytes */${total}` })
+      reply.raw.end()
+      return
+    }
+    const { start, end } = parsed
+    reply.raw.writeHead(206, {
+      'Content-Range': `bytes ${start}-${end}/${total}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': end - start + 1,
+      'Content-Type': 'video/mp4',
+      'Cache-Control': 'public, max-age=3600',
+    })
+    createReadStream(filePath, { start, end: end + 1 }).pipe(reply.raw)
+    return
   }
-  return [
-    '-c:v', 'libx264',
-    '-preset', 'ultrafast',
-    '-crf', '23',
-    '-pix_fmt', 'yuv420p',
-  ]
+
+  reply.raw.writeHead(200, {
+    'Content-Length': total,
+    'Accept-Ranges': 'bytes',
+    'Content-Type': 'video/mp4',
+    'Cache-Control': 'public, max-age=3600',
+  })
+  createReadStream(filePath).pipe(reply.raw)
+}
+
+/**
+ * Spawn ffmpeg to transcode `srcPath` into a complete faststart MP4 at
+ * `finalPath`. Writes to `<finalPath>.part` first and renames atomically on
+ * success so a partial file is never served. Registration in `inProgress`
+ * must already have happened before calling this.
+ */
+async function startTranscode(
+  infoHash: string,
+  name: string,
+  srcPath: string,
+  finalPath: string,
+  cacheKey: string,
+  audioMap: string,
+): Promise<void> {
+  const probe = await probeVideo(srcPath)
+  const vArgs = videoArgs(probe)
+  const partPath = `${finalPath}.part`
+
+  logger.info(
+    {
+      infoHash, name, codec: probe.codec, pixFmt: probe.pixFmt,
+      transcode: vArgs[1] !== 'copy', audioMap, finalPath,
+    },
+    'starting transcode to seekable mp4',
+  )
+
+  const ffmpeg = spawn('ffmpeg', [
+    '-loglevel', 'error',
+    '-i', srcPath,
+    '-map', '0:v:0',
+    '-map', audioMap,
+    ...vArgs,
+    '-c:a', 'aac',
+    '-b:a', '192k',
+    '-ac', '2',
+    '-movflags', '+faststart',
+    '-f', 'mp4',
+    '-y',
+    partPath,
+  ], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+
+  let stderr = ''
+  ffmpeg.stderr.on('data', (d: Buffer) => {
+    stderr += d.toString()
+  })
+
+  ffmpeg.on('error', (err) => {
+    logger.error({ err, infoHash }, 'ffmpeg process error')
+    inProgress.delete(cacheKey)
+    unlink(partPath, () => {})
+  })
+
+  ffmpeg.on('close', (code) => {
+    inProgress.delete(cacheKey)
+    if (code === 0) {
+      try {
+        renameSync(partPath, finalPath)
+        logger.info({ infoHash, finalPath }, 'transcode complete')
+      } catch (err) {
+        logger.error({ err, infoHash }, 'failed to finalize transcode')
+        unlink(partPath, () => {})
+      }
+    } else {
+      logger.warn({ infoHash, code, stderr: stderr.trim() }, 'ffmpeg exited with non-zero code')
+      unlink(partPath, () => {})
+    }
+  })
 }
 
 export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void> {
@@ -91,20 +176,6 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
 
       file.select(2)
 
-      const diskPath = join(torrent.path, file.path)
-      const onDisk = existsSync(diskPath) && statSync(diskPath).size > 0
-
-      if (!onDisk) {
-        reply
-          .status(503)
-          .header('Retry-After', '5')
-          .send({ error: 'video file is still downloading' })
-        return
-      }
-
-      const probe = await probeVideo(diskPath)
-      const vArgs = videoArgs(probe)
-
       // Audio selection: ?audio=<absoluteStreamIndex> picks a specific track
       // (multi-language MKVs expose several). Default to the first audio
       // stream when no override is given.
@@ -114,66 +185,43 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         : null
       const audioMap = audioIdx !== null ? `0:${audioIdx}` : '0:a:0'
 
-      logger.info(
-        {
-          infoHash, fileIndex: index, name: file.name,
-          codec: probe.codec, pixFmt: probe.pixFmt,
-          transcode: vArgs[1] !== 'copy',
-          audioMap,
-        },
-        'starting transmux',
-      )
+      const finalPath = cachePathFor(infoHash, index, audioIdx)
+      const cacheKey = `${infoHash}.${index}.${audioIdx ?? 'def'}`
 
-      const ffmpeg = spawn('ffmpeg', [
-        '-loglevel', 'error',
-        '-i', diskPath,
-        '-map', '0:v:0',
-        '-map', audioMap,
-        ...vArgs,
-        '-c:a', 'aac',
-        '-b:a', '192k',
-        '-ac', '2',
-        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
-        '-f', 'mp4',
-        'pipe:1',
-      ], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
+      // ── Cache hit: serve the finished, seekable MP4 via Range ──────
+      if (existsSync(finalPath)) {
+        serveWithRange(reply, req.headers.range, finalPath)
+        return
+      }
 
-      ffmpeg.stderr.on('data', (data: Buffer) => {
-        const msg = data.toString()
-        if (msg.includes('Error') || msg.includes('error')) {
-          logger.warn({ infoHash, msg: msg.trim() }, 'ffmpeg stderr')
-        }
-      })
+      // ── Transcode in flight: tell the client to retry ─────────────
+      if (inProgress.has(cacheKey)) {
+        reply.status(503).header('Retry-After', '3').send({ error: 'video is being prepared' })
+        return
+      }
 
-      ffmpeg.on('error', (err) => {
-        logger.error({ err, infoHash }, 'ffmpeg process error')
-      })
+      // ── Need the *complete* source on disk before transcoding ─────
+      // A partial source would produce a truncated cache that we'd serve
+      // forever, so require the full file (not just size > 0 like the raw
+      // streamer).
+      const diskPath = join(torrent.path, file.path)
+      const complete = existsSync(diskPath) && statSync(diskPath).size >= file.length
+      if (!complete) {
+        reply
+          .status(503)
+          .header('Retry-After', '5')
+          .send({ error: 'video file is still downloading', progress: torrent.progress })
+        return
+      }
 
-      ffmpeg.on('close', (code) => {
-        if (code !== 0 && code !== null) {
-          logger.warn({ infoHash, code }, 'ffmpeg exited with non-zero code')
-        }
-      })
+      // ── Cache miss: reserve the slot synchronously, then kick off
+      // ffmpeg in the background and ask the client to poll. Reserving
+      // before any await prevents a duplicate spawn from a racing request.
+      inProgress.add(cacheKey)
+      mkdirSync(dirname(finalPath), { recursive: true })
+      void startTranscode(infoHash, file.name, diskPath, finalPath, cacheKey, audioMap)
 
-      req.raw.on('close', () => {
-        ffmpeg.kill('SIGTERM')
-      })
-
-      // Bypass Fastify's reply.send(stream) path: the onSend hook + the
-      // length-zero short-circuit when the stream hasn't emitted yet
-      // produces an empty response. Write headers manually and pipe
-      // ffmpeg.stdout straight to the raw socket.
-      reply.hijack()
-      reply.raw.writeHead(200, {
-        'Content-Type': 'video/mp4',
-        'Transfer-Encoding': 'chunked',
-        'Cache-Control': 'no-cache',
-        'X-Content-Type-Options': 'nosniff',
-      })
-      ffmpeg.stdout.pipe(reply.raw)
-      ffmpeg.stdout.on('end', () => reply.raw.end())
+      reply.status(503).header('Retry-After', '3').send({ error: 'video is being prepared' })
     },
   )
 }

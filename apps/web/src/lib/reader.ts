@@ -49,6 +49,16 @@ export function videoStreamURL(fileId: string, audioIndex?: number): string {
   return `${API_BASE}/api/v1/stream/${fileId}?${params.toString()}`
 }
 
+/** HLS media playlist URL for videos that need re-encoding. hls.js loads this
+ *  and pulls segments lazily; the API rewrites segment URIs to carry the
+ *  token + audio selection. */
+export function hlsPlaylistURL(fileId: string, audioIndex?: number): string {
+  const token = useAuthStore.getState().accessToken ?? ''
+  const params = new URLSearchParams({ token })
+  if (audioIndex !== undefined) params.set('audio', String(audioIndex))
+  return `${API_BASE}/api/v1/hls/${fileId}/playlist.m3u8?${params.toString()}`
+}
+
 /** WebVTT URL for a single subtitle track (referenced by <track src>). */
 export function subtitleURL(fileId: string, streamIndex: number): string {
   const token = useAuthStore.getState().accessToken ?? ''
@@ -65,4 +75,6 @@ export interface VideoTrackInfo {
 export interface VideoMediaInfo {
   audio: VideoTrackInfo[]
   subtitles: VideoTrackInfo[]
+  /** When true the video stream needs re-encoding → use the HLS path. */
+  transcode: boolean
 }

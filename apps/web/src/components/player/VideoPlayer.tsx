@@ -1,8 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
+import Hls from 'hls.js'
 import {
   ArrowLeft,
   Maximize,
@@ -21,6 +22,7 @@ import {
 import { api } from '@/lib/api'
 import {
   videoStreamURL,
+  hlsPlaylistURL,
   subtitleURL,
   type VideoMediaInfo,
   type VideoTrackInfo,
@@ -93,7 +95,107 @@ export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
   const audioTracks = tracksQuery.data?.audio ?? []
   const subtitleTracks = tracksQuery.data?.subtitles ?? []
 
-  const src = useMemo(() => videoStreamURL(fileId, activeAudio), [fileId, activeAudio])
+  // Video stream strategy depends on the source codec (from /probe):
+  //  • H.264 8-bit  → transcode=false → single seekable MP4 (warm-up poll).
+  //  • HEVC/10-bit/… → transcode=true  → on-demand HLS via hls.js.
+  const transcode = tracksQuery.data?.transcode ?? false
+  const infoReady = tracksQuery.isSuccess
+
+  // playableSrc drives the <video src> for the MP4 path and Safari's native
+  // HLS; for hls.js (MSE) it stays null and the Hls instance feeds the element.
+  const [playableSrc, setPlayableSrc] = useState<string | null>(null)
+  const [preparing, setPreparing] = useState(false)
+  const [retryNonce, setRetryNonce] = useState(0)
+
+  // ── MP4 warm-up poll (H.264) ──────────────────────────
+  // The stream URL returns 503 + Retry-After while the engine builds a
+  // seekable MP4 cache; poll a 2-byte Range until ready so the user sees a
+  // "Preparing…" spinner instead of a hard playback error.
+  useEffect(() => {
+    if (!infoReady || transcode) return
+    const mp4Src = videoStreamURL(fileId, activeAudio)
+    let cancelled = false
+    const controller = new AbortController()
+    setPlayableSrc(null)
+    setPreparing(true)
+    setError(null)
+
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const res = await fetch(mp4Src, {
+            headers: { Range: 'bytes=0-1' },
+            signal: controller.signal,
+          })
+          if (cancelled) return
+          if (res.ok || res.status === 206 || res.status === 200) {
+            setPreparing(false)
+            setPlayableSrc(mp4Src)
+            return
+          }
+          if (res.status === 503) {
+            const retry = Number(res.headers.get('Retry-After')) || 3
+            await new Promise((r) => setTimeout(r, retry * 1000))
+            continue
+          }
+          setPreparing(false)
+          setError('Could not load this video.')
+          return
+        } catch (err) {
+          if (cancelled || (err as Error)?.name === 'AbortError') return
+          await new Promise((r) => setTimeout(r, 3000))
+        }
+      }
+    }
+    void poll()
+
+    return () => {
+      cancelled = true
+      controller.abort()
+    }
+  }, [fileId, activeAudio, infoReady, transcode, retryNonce])
+
+  // ── HLS attach (re-encode path) ───────────────────────
+  // Segments are encoded on demand, so playback starts in ~1s and seeking
+  // works for any codec. hls.js drives the element via MSE; Safari plays the
+  // playlist natively.
+  useEffect(() => {
+    if (!infoReady || !transcode) return
+    const v = videoRef.current
+    if (!v) return
+    const url = hlsPlaylistURL(fileId, activeAudio)
+    setPreparing(false)
+    setError(null)
+
+    if (!Hls.isSupported()) {
+      if (v.canPlayType('application/vnd.apple.mpegurl')) {
+        setPlayableSrc(url) // Safari native HLS
+      } else {
+        setError('Your browser does not support this video.')
+      }
+      return
+    }
+
+    setPlayableSrc(null) // hls.js attaches to the element directly
+    const hls = new Hls({ enableWorker: true })
+    hls.loadSource(url)
+    hls.attachMedia(v)
+    hls.on(Hls.Events.ERROR, (_evt, data) => {
+      if (!data.fatal) return
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+        hls.startLoad()
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        hls.recoverMediaError()
+      } else {
+        setError('Playback error while streaming this video.')
+        hls.destroy()
+      }
+    })
+
+    return () => {
+      hls.destroy()
+    }
+  }, [fileId, activeAudio, infoReady, transcode, retryNonce])
 
   // ── Auto-hide overlay ─────────────────────────────────
   const resetHideTimer = useCallback(() => {
@@ -173,16 +275,51 @@ export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
     }
   }, [])
 
+  // ── Default the subtitle track on first load ──────────
+  // Players normally start with subtitles on when the file has them. Prefer an
+  // English track, else the first one. Only auto-selects once so it never
+  // overrides a later explicit "Off" by the user.
+  const subtitleInitRef = useRef(false)
+  useEffect(() => {
+    if (subtitleInitRef.current || subtitleTracks.length === 0) return
+    subtitleInitRef.current = true
+    const en = subtitleTracks.findIndex((t) => t.language?.toLowerCase().startsWith('en'))
+    setActiveSubtitle(en >= 0 ? en : 0)
+  }, [subtitleTracks])
+
   // ── Subtitle track enable/disable ─────────────────────
   // textTracks is a live list — toggling .mode picks which one renders.
-  useEffect(() => {
+  const applySubtitleMode = useCallback(() => {
     const v = videoRef.current
     if (!v) return
     for (let i = 0; i < v.textTracks.length; i++) {
       const tt = v.textTracks[i]
-      tt.mode = i === activeSubtitle ? 'showing' : 'disabled'
+      if (i === activeSubtitle) {
+        // hidden→showing forces the browser to re-evaluate the cue active at
+        // the current position (e.g. right after a seek) instead of waiting
+        // for the next cue boundary.
+        tt.mode = 'hidden'
+        tt.mode = 'showing'
+      } else {
+        tt.mode = 'disabled'
+      }
     }
-  }, [activeSubtitle, subtitleTracks.length])
+  }, [activeSubtitle])
+
+  useEffect(() => {
+    applySubtitleMode()
+  }, [applySubtitleMode, subtitleTracks.length])
+
+  // On the HLS path, hls.js's timeline controller touches the video's
+  // textTracks when it switches segments on a seek, which can silently reset
+  // our external <track> back to disabled. Re-assert the active track after
+  // every seek so subtitles survive scrubbing.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    v.addEventListener('seeked', applySubtitleMode)
+    return () => v.removeEventListener('seeked', applySubtitleMode)
+  }, [applySubtitleMode])
 
   // ── Controls ──────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -307,7 +444,7 @@ export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
           with the video.textTracks list at mount time. */}
       <video
         ref={videoRef}
-        src={src}
+        src={playableSrc ?? undefined}
         className="h-full w-full object-contain"
         playsInline
         preload="auto"
@@ -326,9 +463,12 @@ export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
         ))}
       </video>
 
-      {loading && !error && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+      {(loading || preparing) && !error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none">
           <Loader2 className="h-12 w-12 animate-spin text-white/60" />
+          {preparing && (
+            <p className="text-sm text-white/60">Preparing video…</p>
+          )}
         </div>
       )}
 
@@ -340,7 +480,7 @@ export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
               The server will transmux this file through ffmpeg. If this keeps failing the source codec may be unsupported.
             </p>
             <button
-              onClick={() => { setError(null); videoRef.current?.load() }}
+              onClick={() => { setError(null); setRetryNonce((n) => n + 1) }}
               className="rounded-md bg-white/10 px-4 py-2 text-sm text-white hover:bg-white/20 transition-colors"
             >
               Retry

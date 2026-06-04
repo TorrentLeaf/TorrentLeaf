@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -99,7 +101,14 @@ func (h *ReaderHandler) StreamFile(c *fiber.Ctx) error {
 	// MKV/AVI/WMV need transmuxing — browsers can't play them natively
 	if needsTransmux(target.FileType, target.MimeType) {
 		url := fmt.Sprintf("%s/engine/transmux/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
-		return h.proxyUpstream(c, url, "video/mp4", false) // transmux stream is not seekable
+		// Forward the audio track selection (?audio=<absoluteStreamIndex>) so
+		// multi-language MKVs play the chosen track instead of always the first.
+		if a := c.Query("audio"); a != "" {
+			url += "?audio=" + neturl.QueryEscape(a)
+		}
+		// The engine transcodes to a complete faststart MP4 and serves it with
+		// Range support, so forward the browser's Range header for seeking.
+		return h.proxyUpstream(c, url, "video/mp4", true)
 	}
 
 	url := fmt.Sprintf("%s/engine/stream/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
@@ -209,6 +218,96 @@ func (h *ReaderHandler) StreamSubtitle(c *fiber.Ctx) error {
 	return h.proxyUpstream(c, url, "text/vtt; charset=utf-8", false)
 }
 
+// HLSPlaylist proxies the engine's HLS media playlist for videos that need
+// re-encoding. Each relative segment URI is rewritten to carry the auth token
+// (and audio selection) because hls.js can't set headers on segment requests,
+// and relative URIs drop the playlist's query string. Mounted at
+// GET /api/v1/hls/:fileId/playlist.m3u8.
+func (h *ReaderHandler) HLSPlaylist(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fileID, err := uuid.Parse(c.Params("fileId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	if target.FileType != domain.FileTypeVideo {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "file is not a video")
+	}
+
+	url := fmt.Sprintf("%s/engine/hls/%s/%d/playlist.m3u8", h.engineURL, target.InfoHash, target.FileIndex)
+	req, err := http.NewRequestWithContext(c.Context(), http.MethodGet, url, nil)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "build upstream request")
+	}
+	resp, err := h.http.Do(req)
+	if err != nil {
+		h.log.Warn().Err(err).Str("url", url).Msg("engine playlist failed")
+		return fiber.NewError(fiber.StatusBadGateway, "engine unreachable")
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, "read engine playlist")
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Pass through 503 + Retry-After while the file is still downloading.
+		if ra := resp.Header.Get("Retry-After"); ra != "" {
+			c.Set("Retry-After", ra)
+		}
+		c.Status(resp.StatusCode)
+		return c.Send(body)
+	}
+
+	// Append ?token=&audio= to each segment URI (non-comment, non-empty line).
+	q := "?token=" + neturl.QueryEscape(c.Query("token"))
+	if a := c.Query("audio"); a != "" {
+		q += "&audio=" + neturl.QueryEscape(a)
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(string(body), "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			b.WriteString(t + q + "\n")
+		} else {
+			b.WriteString(line + "\n")
+		}
+	}
+	c.Set("Content-Type", "application/vnd.apple.mpegurl")
+	c.Set("Cache-Control", "no-cache")
+	return c.SendString(b.String())
+}
+
+// HLSSegment proxies one MPEG-TS segment encoded on-demand by the engine.
+// Mounted at GET /api/v1/hls/:fileId/seg/:seg.
+func (h *ReaderHandler) HLSSegment(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fileID, err := uuid.Parse(c.Params("fileId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+	}
+	seg, err := strconv.Atoi(c.Params("seg"))
+	if err != nil || seg < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid segment")
+	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	url := fmt.Sprintf("%s/engine/hls/%s/%d/seg/%d", h.engineURL, target.InfoHash, target.FileIndex, seg)
+	if a := c.Query("audio"); a != "" {
+		url += "?audio=" + neturl.QueryEscape(a)
+	}
+	return h.proxyUpstream(c, url, "video/mp2t", false)
+}
+
 // proxyUpstream performs the HTTP proxy to the engine, forwarding the body
 // and relevant headers. If forwardRange is true, the client's Range header
 // is copied upstream.
@@ -230,7 +329,7 @@ func (h *ReaderHandler) proxyUpstream(c *fiber.Ctx, url, fallbackMime string, fo
 	}
 	defer resp.Body.Close()
 
-	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Transfer-Encoding", "Cache-Control"} {
+	for _, k := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified", "Transfer-Encoding", "Cache-Control", "Retry-After"} {
 		if v := resp.Header.Get(k); v != "" {
 			c.Set(k, v)
 		}
