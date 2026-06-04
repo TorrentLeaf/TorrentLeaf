@@ -206,7 +206,9 @@ func (r *fakeSettingsRepo) GetByUserID(_ context.Context, userID uuid.UUID) (*do
 		cp := *s
 		return &cp, nil
 	}
-	s := &domain.UserSettings{ID: uuid.New(), UserID: userID}
+	// Mirror the DB defaults from migration 004: every column is NOT NULL
+	// with a default, so a freshly-auto-created row should match.
+	s := &domain.UserSettings{ID: uuid.New(), UserID: userID, AutoAddLibrary: true}
 	r.settings[userID] = s
 	cp := *s
 	return &cp, nil
@@ -398,6 +400,29 @@ func TestAddAutoShelvesToLibrary(t *testing.T) {
 	items, _ = lr.ListByUser(context.Background(), userID, repository.LibraryListFilter{})
 	if items[0].Item.Title != "Real Name" {
 		t.Errorf("title should update to real name after metadata, got %q", items[0].Item.Title)
+	}
+}
+
+func TestAddSkipsLibraryWhenAutoAddDisabled(t *testing.T) {
+	sr := newFakeTorrentRepo()
+	fr := newFakeFileRepo()
+	lr := newFakeLibraryRepo()
+	stRepo := newFakeSettingsRepo()
+	svc := NewTorrentService(sr, fr, lr, stRepo, &fakeEngine{})
+	userID := uuid.New()
+
+	// User opted out of auto-shelving.
+	_, _ = stRepo.Upsert(context.Background(), domain.UserSettings{
+		UserID:         userID,
+		AutoAddLibrary: false,
+	})
+
+	if _, err := svc.Add(context.Background(), userID, validMagnet); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	items, _ := lr.ListByUser(context.Background(), userID, repository.LibraryListFilter{})
+	if len(items) != 0 {
+		t.Errorf("expected library to stay empty, got %d items", len(items))
 	}
 }
 

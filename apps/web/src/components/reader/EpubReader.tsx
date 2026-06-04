@@ -6,6 +6,7 @@ import { Type, Minus, Plus } from 'lucide-react'
 
 import { pageStreamURL } from '@/lib/reader'
 import { useReadingProgress } from '@/hooks/use-reading-progress'
+import { useUserSettings } from '@/hooks/use-user-settings'
 import { ReaderShell } from './ReaderShell'
 
 export interface EpubReaderProps {
@@ -23,9 +24,10 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
   const renditionRef = useRef<Rendition | null>(null)
 
   const { progress, save } = useReadingProgress(fileId)
+  const { settings } = useUserSettings()
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [background, setBackground] = useState('#1a1a2e')
+  const [background, setBackground] = useState(settings.readerBackground || '#1a1a2e')
   const [fontSize, setFontSize] = useState(100)
   const [title, setTitle] = useState('EPUB Reader')
   const [currentCfi, setCurrentCfi] = useState<string | null>(null)

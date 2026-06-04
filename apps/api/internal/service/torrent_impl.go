@@ -87,14 +87,22 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	// Auto-shelf: create a library row with the infoHash as placeholder title.
 	// The real name lands via ApplyMetadata once the swarm delivers metadata.
 	// Conflicts (user re-added the same torrent) are swallowed — idempotency.
-	if _, err := s.library.Create(ctx, domain.LibraryItem{
-		UserID:    userID,
-		SessionID: session.ID,
-		Title:     session.InfoHash,
-		Type:      domain.LibraryTypeOther,
-	}); err != nil {
-		if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
-			return nil, err
+	// Gated by the user's autoAddLibrary setting; users who turn it off keep
+	// torrents in the swarm without having them appear on the library grid.
+	autoAdd := true
+	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
+		autoAdd = userSettings.AutoAddLibrary
+	}
+	if autoAdd {
+		if _, err := s.library.Create(ctx, domain.LibraryItem{
+			UserID:    userID,
+			SessionID: session.ID,
+			Title:     session.InfoHash,
+			Type:      domain.LibraryTypeOther,
+		}); err != nil {
+			if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
+				return nil, err
+			}
 		}
 	}
 

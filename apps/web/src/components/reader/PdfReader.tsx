@@ -10,6 +10,7 @@ import { Minus, Plus } from 'lucide-react'
 import { pageStreamURL } from '@/lib/reader'
 import { useAuthStore } from '@/store/auth'
 import { useReadingProgress } from '@/hooks/use-reading-progress'
+import { useUserSettings } from '@/hooks/use-user-settings'
 import { ReaderShell } from './ReaderShell'
 
 export interface PdfReaderProps {
@@ -31,13 +32,14 @@ export function PdfReader({ fileId }: PdfReaderProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const renderTaskRef = useRef<{ cancel: () => void } | null>(null)
 
+  const { settings } = useUserSettings()
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
   const [zoom, setZoom] = useState(1.25)
   const [error, setError] = useState<string | null>(null)
   const [restored, setRestored] = useState(false)
-  const [background, setBackground] = useState('#1e1e1e')
+  const [background, setBackground] = useState(settings.readerBackground || '#1e1e1e')
 
   const { progress, save } = useReadingProgress(fileId)
 
