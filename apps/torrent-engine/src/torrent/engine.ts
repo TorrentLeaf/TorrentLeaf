@@ -14,6 +14,9 @@ export type WTTorrent = {
   numPeers: number
   downloaded: number
   files: WTFile[]
+  // Absolute directory where this torrent's files are stored on disk.
+  // Set by webtorrent from the `path` option passed to client.add().
+  path: string
   on(event: string, cb: (...args: unknown[]) => void): void
   destroy(cb?: (err?: Error) => void): void
 }

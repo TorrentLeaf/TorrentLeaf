@@ -4,18 +4,64 @@ import { join } from 'path'
 import { spawn } from 'child_process'
 import { engine } from '../../torrent/engine.js'
 import { logger } from '../../logger.js'
-import { config } from '../../config.js'
 
 /**
  * /engine/transmux/:infoHash/:fileIndex
  *
- * Transmuxes a video file (typically MKV) to fragmented MP4 on-the-fly via
- * ffmpeg. The browser can then play the resulting mp4 stream natively in a
- * <video> element.
+ * Repackages (and, when needed, re-encodes) a video file into fragmented
+ * MP4 on-the-fly via ffmpeg so the browser can play it in a <video> element.
  *
- * This does NOT re-encode — it copies the video/audio streams (very fast,
- * ~0% CPU) and simply repackages them into the fMP4 container.
+ * Source codec is probed first: 8-bit H.264 is copied as-is (zero-CPU);
+ * everything else (HEVC/H.265, VP9, AV1, 10-bit H.264 like Hi10P) is
+ * re-encoded to baseline H.264 because no major browser plays those codecs
+ * inside MP4. Audio is always re-encoded to AAC for the same reason
+ * (handles EAC3/DTS/FLAC sources).
  */
+
+interface VideoProbe {
+  codec: string | null
+  pixFmt: string | null
+}
+
+function probeVideo(filePath: string): Promise<VideoProbe> {
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'error',
+      '-select_streams', 'v:0',
+      '-show_entries', 'stream=codec_name,pix_fmt',
+      '-of', 'json',
+      filePath,
+    ])
+    let out = ''
+    proc.stdout.on('data', (d: Buffer) => {
+      out += d.toString()
+    })
+    proc.on('close', () => {
+      try {
+        const j = JSON.parse(out)
+        const s = j.streams?.[0] ?? {}
+        resolve({ codec: s.codec_name ?? null, pixFmt: s.pix_fmt ?? null })
+      } catch {
+        resolve({ codec: null, pixFmt: null })
+      }
+    })
+    proc.on('error', () => resolve({ codec: null, pixFmt: null }))
+  })
+}
+
+function videoArgs(probe: VideoProbe): string[] {
+  const browserSafePixFmts = new Set(['yuv420p', 'yuvj420p'])
+  if (probe.codec === 'h264' && probe.pixFmt !== null && browserSafePixFmts.has(probe.pixFmt)) {
+    return ['-c:v', 'copy']
+  }
+  return [
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',
+    '-crf', '23',
+    '-pix_fmt', 'yuv420p',
+  ]
+}
+
 export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { infoHash: string; fileIndex: string } }>(
     '/engine/transmux/:infoHash/:fileIndex',
@@ -34,11 +80,9 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         return
       }
 
-      // Prioritize this file for download
       file.select(2)
 
-      // Check if file is available on disk
-      const diskPath = join(config.downloadPath, file.path)
+      const diskPath = join(torrent.path, file.path)
       const onDisk = existsSync(diskPath) && statSync(diskPath).size > 0
 
       if (!onDisk) {
@@ -49,29 +93,32 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         return
       }
 
-      logger.info({ infoHash, fileIndex: index, name: file.name }, 'starting transmux')
+      const probe = await probeVideo(diskPath)
+      const vArgs = videoArgs(probe)
+      logger.info(
+        { infoHash, fileIndex: index, name: file.name, codec: probe.codec, pixFmt: probe.pixFmt, transcode: vArgs[1] !== 'copy' },
+        'starting transmux',
+      )
 
-      // Read from disk for reliability (webtorrent stream may be empty after reseed)
       const inputStream = fsCreateReadStream(diskPath)
 
       const ffmpeg = spawn('ffmpeg', [
-        '-i', 'pipe:0',           // Read from stdin
-        '-c:v', 'copy',           // Copy video codec (no re-encoding)
-        '-c:a', 'aac',            // Transcode audio to AAC for browser compat
-        '-movflags', 'frag_keyframe+empty_moov+faststart',
-        '-f', 'mp4',              // Output format: fragmented MP4
-        'pipe:1',                 // Write to stdout
+        '-i', 'pipe:0',
+        ...vArgs,
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-ac', '2',
+        '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+        '-f', 'mp4',
+        'pipe:1',
       ], {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
 
-      // Pipe file stream → ffmpeg stdin
       inputStream.pipe(ffmpeg.stdin)
 
-      // Handle ffmpeg errors gracefully
       ffmpeg.stderr.on('data', (data: Buffer) => {
         const msg = data.toString()
-        // ffmpeg logs progress to stderr — only log actual errors
         if (msg.includes('Error') || msg.includes('error')) {
           logger.warn({ infoHash, msg: msg.trim() }, 'ffmpeg stderr')
         }
@@ -87,19 +134,23 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         }
       })
 
-      // When the client disconnects, kill ffmpeg
       req.raw.on('close', () => {
         ffmpeg.kill('SIGTERM')
       })
 
-      reply
-        .status(200)
-        .headers({
-          'Content-Type': 'video/mp4',
-          'Transfer-Encoding': 'chunked',
-          'Cache-Control': 'no-cache',
-        })
-        .send(ffmpeg.stdout)
+      // Bypass Fastify's reply.send(stream) path: the onSend hook + the
+      // length-zero short-circuit when the stream hasn't emitted yet
+      // produces an empty response. Write headers manually and pipe
+      // ffmpeg.stdout straight to the raw socket.
+      reply.hijack()
+      reply.raw.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Transfer-Encoding': 'chunked',
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      ffmpeg.stdout.pipe(reply.raw)
+      ffmpeg.stdout.on('end', () => reply.raw.end())
     },
   )
 }

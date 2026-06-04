@@ -3,7 +3,6 @@ import { existsSync, createReadStream, statSync } from 'fs'
 import { join } from 'path'
 import { engine } from '../torrent/engine.js'
 import { detectMime } from '../files/detector.js'
-import { config } from '../config.js'
 import { logger } from '../logger.js'
 
 interface ParsedRange {
@@ -36,10 +35,12 @@ export function parseRange(header: string, total: number): ParsedRange | null {
 
 /**
  * Resolve the absolute path of a torrent file on disk.
+ * Uses torrent.path so it respects per-torrent storage directories from
+ * user settings instead of always defaulting to the engine's global path.
  * Returns null if the file does not exist or has zero size.
  */
-function resolveDiskPath(file: { path: string }): string | null {
-  const filePath = join(config.downloadPath, file.path)
+function resolveDiskPath(torrent: { path: string }, file: { path: string }): string | null {
+  const filePath = join(torrent.path, file.path)
   if (!existsSync(filePath)) return null
   try {
     const stat = statSync(filePath)
@@ -78,7 +79,7 @@ export async function streamFile(
   // When a torrent is re-added via reseed, webtorrent's createReadStream()
   // may return empty even though the data is fully on disk. Reading directly
   // from the filesystem solves this for completed downloads.
-  const diskPath = resolveDiskPath(file)
+  const diskPath = resolveDiskPath(torrent, file)
 
   if (diskPath) {
     const stat = statSync(diskPath)
