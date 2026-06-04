@@ -30,8 +30,10 @@ func (r *settingsRepo) GetByUserID(ctx context.Context, userID uuid.UUID) (*doma
 	s, err := scanSettings(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Auto-create with defaults.
-			return r.Upsert(ctx, domain.UserSettings{UserID: userID})
+			// Auto-create with defaults. AutoAddLibrary must be set explicitly
+			// here: it's a bool whose zero value (false) would otherwise be
+			// written on INSERT, silently overriding the column's DEFAULT true.
+			return r.Upsert(ctx, domain.UserSettings{UserID: userID, AutoAddLibrary: true})
 		}
 		return nil, fmt.Errorf("get user settings: %w", err)
 	}
