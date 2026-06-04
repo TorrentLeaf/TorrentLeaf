@@ -4,8 +4,9 @@ WORKDIR /app
 
 # webtorrent needs native dependencies for node-datachannel (WebRTC)
 # ffmpeg is required for MKV/AVI/WMV → MP4 on-the-fly transmuxing
+# p7zip-full provides /usr/bin/7z used by the 7z archive extractor
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ curl git ca-certificates ffmpeg \
+    python3 make g++ curl git ca-certificates ffmpeg p7zip-full \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./

@@ -216,7 +216,11 @@ func normalizeFileType(t string) domain.FileType {
 		// only surfaces image entries, so a non-comic ZIP just renders as
 		// an empty page list rather than failing.
 		return domain.FileTypeCBZ
-	case "cbr":
+	case "cbr", "sevenz":
+		// 7z is stored as 'cbr' in the DB (the schema constraint predates 7z
+		// support). The engine archive route inspects the actual file
+		// extension and picks the right extractor, so the type alias is
+		// transparent to readers.
 		return domain.FileTypeCBR
 	case "video":
 		return domain.FileTypeVideo
@@ -251,7 +255,8 @@ func normalizeFileTypeWithName(t, name string) domain.FileType {
 		return domain.FileTypeEPUB
 	case strings.HasSuffix(lower, ".cbz"), strings.HasSuffix(lower, ".zip"):
 		return domain.FileTypeCBZ
-	case strings.HasSuffix(lower, ".cbr"), strings.HasSuffix(lower, ".rar"):
+	case strings.HasSuffix(lower, ".cbr"), strings.HasSuffix(lower, ".rar"),
+		strings.HasSuffix(lower, ".7z"):
 		return domain.FileTypeCBR
 	}
 	return domain.FileTypeUnknown

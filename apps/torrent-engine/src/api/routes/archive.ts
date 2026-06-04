@@ -8,6 +8,8 @@ import {
   openCbzEntry,
   listCbrEntries,
   openCbrEntry,
+  listSevenZEntries,
+  openSevenZEntry,
   type ArchiveEntry,
   type OpenedEntry,
 } from '../../files/archive.js'
@@ -26,7 +28,7 @@ function streamToBuffer(stream: Readable): Promise<Buffer> {
   })
 }
 
-type ArchiveKind = 'cbz' | 'cbr'
+type ArchiveKind = 'cbz' | 'cbr' | 'sevenz'
 
 type ResolveOk = { kind: 'ok'; torrent: WTTorrent; file: WTFile; type: ArchiveKind }
 type ResolveErr = { kind: 'err'; status: number; message: string }
@@ -38,6 +40,7 @@ const ARCHIVE_READ_TIMEOUT_MS = 15_000
 function archiveKindFor(t: FileType): ArchiveKind | null {
   if (t === 'cbz' || t === 'zip') return 'cbz'
   if (t === 'cbr') return 'cbr'
+  if (t === 'sevenz') return 'sevenz'
   return null
 }
 
@@ -61,13 +64,15 @@ function resolveArchiveFile(infoHash: string, fileIndexStr: string): ResolveOk |
 }
 
 function listEntries(r: ResolveOk): Promise<ArchiveEntry[]> {
-  return r.type === 'cbz' ? listCbzEntries(r.file) : listCbrEntries(r.torrent, r.file)
+  if (r.type === 'cbz') return listCbzEntries(r.file)
+  if (r.type === 'cbr') return listCbrEntries(r.torrent, r.file)
+  return listSevenZEntries(r.torrent, r.file)
 }
 
 function openEntry(r: ResolveOk, entryIndex: number): Promise<OpenedEntry> {
-  return r.type === 'cbz'
-    ? openCbzEntry(r.file, entryIndex)
-    : openCbrEntry(r.torrent, r.file, entryIndex)
+  if (r.type === 'cbz') return openCbzEntry(r.file, entryIndex)
+  if (r.type === 'cbr') return openCbrEntry(r.torrent, r.file, entryIndex)
+  return openSevenZEntry(r.torrent, r.file, entryIndex)
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, tag: string): Promise<T> {
