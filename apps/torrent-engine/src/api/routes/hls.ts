@@ -3,8 +3,8 @@ import { existsSync, statSync, mkdirSync, renameSync, createReadStream, unlink }
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { engine, type WTTorrent, type WTFile } from '../../torrent/engine.js'
-import { config } from '../../config.js'
 import { probeVideo, videoArgs } from '../../files/video.js'
+import { hlsSegmentDir, enforceCacheLimit } from '../../files/transcodeCache.js'
 import { logger } from '../../logger.js'
 
 /**
@@ -100,6 +100,7 @@ function encodeSegment(
       if (code === 0) {
         try {
           renameSync(partPath, outPath)
+          enforceCacheLimit()
           resolve()
         } catch (e) {
           reject(e)
@@ -170,10 +171,7 @@ export async function registerHlsRoutes(app: FastifyInstance): Promise<void> {
       }
       const segDur = dur > 0 ? Math.min(SEG_DURATION, dur - start) : SEG_DURATION
 
-      const dir = join(
-        config.downloadPath, '.transcode', 'hls',
-        `${req.params.infoHash}.${req.params.fileIndex}.${audio.key}`,
-      )
+      const dir = hlsSegmentDir(req.params.infoHash, Number(req.params.fileIndex), audio.key)
       const outPath = join(dir, `seg-${n}.ts`)
 
       if (!existsSync(outPath)) {

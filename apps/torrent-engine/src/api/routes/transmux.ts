@@ -3,9 +3,9 @@ import { existsSync, statSync, mkdirSync, renameSync, createReadStream, unlink }
 import { join, dirname } from 'path'
 import { spawn } from 'child_process'
 import { engine } from '../../torrent/engine.js'
-import { config } from '../../config.js'
 import { parseRange } from '../../streaming/streamer.js'
 import { probeVideo, videoArgs } from '../../files/video.js'
+import { mp4CachePath, enforceCacheLimit } from '../../files/transcodeCache.js'
 import { logger } from '../../logger.js'
 
 /**
@@ -36,12 +36,6 @@ import { logger } from '../../logger.js'
 // In-flight transcodes keyed by cache filename, so concurrent requests for
 // the same output don't spawn duplicate ffmpeg processes.
 const inProgress = new Set<string>()
-
-/** Absolute path of the cached transcode for a given file + audio track. */
-function cachePathFor(infoHash: string, fileIndex: number, audioIdx: number | null): string {
-  const audioKey = audioIdx !== null ? `a${audioIdx}` : 'adef'
-  return join(config.downloadPath, '.transcode', `${infoHash}.${fileIndex}.${audioKey}.mp4`)
-}
 
 /** Serve a complete file on disk with Range support (mirrors the streamer). */
 function serveWithRange(reply: FastifyReply, rangeHeader: string | undefined, filePath: string): void {
@@ -136,6 +130,7 @@ async function startTranscode(
       try {
         renameSync(partPath, finalPath)
         logger.info({ infoHash, finalPath }, 'transcode complete')
+        enforceCacheLimit()
       } catch (err) {
         logger.error({ err, infoHash }, 'failed to finalize transcode')
         unlink(partPath, () => {})
@@ -184,9 +179,10 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         ? Number(audioIdxRaw)
         : null
       const audioMap = audioIdx !== null ? `0:${audioIdx}` : '0:a:0'
+      const audioKey = audioIdx !== null ? `a${audioIdx}` : 'adef'
 
-      const finalPath = cachePathFor(infoHash, index, audioIdx)
-      const cacheKey = `${infoHash}.${index}.${audioIdx ?? 'def'}`
+      const finalPath = mp4CachePath(infoHash, index, audioKey)
+      const cacheKey = `${infoHash}.${index}.${audioKey}`
 
       // ── Cache hit: serve the finished, seekable MP4 via Range ──────
       if (existsSync(finalPath)) {
