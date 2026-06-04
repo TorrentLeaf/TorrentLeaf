@@ -1,8 +1,16 @@
 import type { Readable } from 'node:stream'
 import type { FastifyInstance, FastifyReply } from 'fastify'
-import { engine, type WTFile } from '../../torrent/engine.js'
+import { engine, type WTFile, type WTTorrent } from '../../torrent/engine.js'
 import { classifyFile } from '../../files/detector.js'
-import { listCbzEntries, openCbzEntry } from '../../files/archive.js'
+import type { FileType } from '../../torrent/types.js'
+import {
+  listCbzEntries,
+  openCbzEntry,
+  listCbrEntries,
+  openCbrEntry,
+  type ArchiveEntry,
+  type OpenedEntry,
+} from '../../files/archive.js'
 
 // Drains an entire Readable into a Buffer. We use it for CBZ entries rather
 // than streaming directly to Fastify's reply because yauzl's read streams are
@@ -18,12 +26,20 @@ function streamToBuffer(stream: Readable): Promise<Buffer> {
   })
 }
 
-type ResolveOk = { kind: 'ok'; file: WTFile }
+type ArchiveKind = 'cbz' | 'cbr'
+
+type ResolveOk = { kind: 'ok'; torrent: WTTorrent; file: WTFile; type: ArchiveKind }
 type ResolveErr = { kind: 'err'; status: number; message: string }
 
-// If reading the zip central directory takes longer than this, assume the
-// tail pieces aren't available yet and tell the caller to retry.
+// If reading the archive headers takes longer than this, assume the pieces
+// aren't available yet and tell the caller to retry.
 const ARCHIVE_READ_TIMEOUT_MS = 15_000
+
+function archiveKindFor(t: FileType): ArchiveKind | null {
+  if (t === 'cbz' || t === 'zip') return 'cbz'
+  if (t === 'cbr') return 'cbr'
+  return null
+}
 
 function resolveArchiveFile(infoHash: string, fileIndexStr: string): ResolveOk | ResolveErr {
   const torrent = engine.get(infoHash)
@@ -37,11 +53,21 @@ function resolveArchiveFile(infoHash: string, fileIndexStr: string): ResolveOk |
   }
   const file = torrent.files[idx]
   if (!file) return { kind: 'err', status: 404, message: 'file not found' }
-  const type = classifyFile(file.name)
-  if (type !== 'cbz' && type !== 'zip') {
-    return { kind: 'err', status: 415, message: `not a cbz archive (type: ${type})` }
+  const archiveKind = archiveKindFor(classifyFile(file.name))
+  if (!archiveKind) {
+    return { kind: 'err', status: 415, message: `not an archive (type: ${classifyFile(file.name)})` }
   }
-  return { kind: 'ok', file }
+  return { kind: 'ok', torrent, file, type: archiveKind }
+}
+
+function listEntries(r: ResolveOk): Promise<ArchiveEntry[]> {
+  return r.type === 'cbz' ? listCbzEntries(r.file) : listCbrEntries(r.torrent, r.file)
+}
+
+function openEntry(r: ResolveOk, entryIndex: number): Promise<OpenedEntry> {
+  return r.type === 'cbz'
+    ? openCbzEntry(r.file, entryIndex)
+    : openCbrEntry(r.torrent, r.file, entryIndex)
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, tag: string): Promise<T> {
@@ -75,14 +101,14 @@ export async function registerArchiveRoutes(app: FastifyInstance): Promise<void>
       r.file.select(1)
       try {
         const entries = await withTimeout(
-          listCbzEntries(r.file),
+          listEntries(r),
           ARCHIVE_READ_TIMEOUT_MS,
           'list entries',
         )
         reply.send(entries)
       } catch (err) {
-        app.log.warn({ err }, 'failed to list cbz entries')
-        // Assume transient: tail pieces still in flight from the swarm.
+        app.log.warn({ err }, 'failed to list archive entries')
+        // Assume transient: pieces still in flight from the swarm.
         reply.status(503).send({ error: 'archive not ready, retry' })
       }
     },
@@ -103,7 +129,7 @@ export async function registerArchiveRoutes(app: FastifyInstance): Promise<void>
       r.file.select(1)
       try {
         const entry = await withTimeout(
-          openCbzEntry(r.file, entryIdx),
+          openEntry(r, entryIdx),
           ARCHIVE_READ_TIMEOUT_MS,
           'open entry',
         )
@@ -121,7 +147,7 @@ export async function registerArchiveRoutes(app: FastifyInstance): Promise<void>
           })
           .send(body)
       } catch (err) {
-        app.log.warn({ err }, 'failed to open cbz entry')
+        app.log.warn({ err }, 'failed to open archive entry')
         reply.status(503).send({ error: 'archive entry not ready, retry' })
       }
     },

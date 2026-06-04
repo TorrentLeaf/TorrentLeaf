@@ -113,7 +113,7 @@ func (s *readerService) ListPages(ctx context.Context, userID, sessionID, onlyFi
 				MimeType: f.MimeType,
 				Length:   f.Length,
 			})
-		case domain.FileTypeCBZ:
+		case domain.FileTypeCBZ, domain.FileTypeCBR:
 			if s.archive == nil {
 				continue
 			}
@@ -137,7 +137,7 @@ func (s *readerService) ListPages(ctx context.Context, userID, sessionID, onlyFi
 				})
 			}
 		default:
-			// pdf/epub/cbr/unknown — not materialized as Pages.
+			// pdf/epub/unknown — not materialized as Pages.
 		}
 	}
 

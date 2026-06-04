@@ -211,7 +211,10 @@ func normalizeFileType(t string) domain.FileType {
 		return domain.FileTypePDF
 	case "epub":
 		return domain.FileTypeEPUB
-	case "cbz":
+	case "cbz", "zip":
+		// A plain .zip from the swarm is treated as CBZ — the archive route
+		// only surfaces image entries, so a non-comic ZIP just renders as
+		// an empty page list rather than failing.
 		return domain.FileTypeCBZ
 	case "cbr":
 		return domain.FileTypeCBR
@@ -246,9 +249,9 @@ func normalizeFileTypeWithName(t, name string) domain.FileType {
 		return domain.FileTypePDF
 	case strings.HasSuffix(lower, ".epub"):
 		return domain.FileTypeEPUB
-	case strings.HasSuffix(lower, ".cbz"):
+	case strings.HasSuffix(lower, ".cbz"), strings.HasSuffix(lower, ".zip"):
 		return domain.FileTypeCBZ
-	case strings.HasSuffix(lower, ".cbr"):
+	case strings.HasSuffix(lower, ".cbr"), strings.HasSuffix(lower, ".rar"):
 		return domain.FileTypeCBR
 	}
 	return domain.FileTypeUnknown

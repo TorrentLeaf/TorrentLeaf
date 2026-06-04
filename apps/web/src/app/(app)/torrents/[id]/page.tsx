@@ -23,8 +23,8 @@ import { useTorrentProgress } from '@/hooks/use-torrent-progress'
 import { useToast } from '@/hooks/use-toast'
 
 function readerLinkFor(sessionId: string, file: TorrentFile): string | null {
-  // CBZ chapters are self-contained — open just that chapter.
-  if (file.fileType === 'cbz') {
+  // CBZ/CBR chapters are self-contained archives — open just that chapter.
+  if (file.fileType === 'cbz' || file.fileType === 'cbr') {
     return `/read/manga/${sessionId}?fileId=${encodeURIComponent(file.id)}`
   }
   // Loose images belong to a single album — open the full reader and jump

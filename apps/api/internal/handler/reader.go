@@ -115,6 +115,14 @@ func needsTransmux(fileType domain.FileType, _ string) bool {
 	return fileType == domain.FileTypeVideo
 }
 
+// isArchive reports whether the file is a comic archive whose individual
+// images should be streamed through /engine/archive rather than the whole
+// file through /engine/stream. CBZ uses a ZIP container, CBR a RAR
+// container; both expose the same per-entry endpoint shape.
+func isArchive(t domain.FileType) bool {
+	return t == domain.FileTypeCBZ || t == domain.FileTypeCBR
+}
+
 // StreamPage is mounted at GET /api/v1/stream/:fileId/:page.
 //
 // For CBZ files, :page is the zero-based index of an archive entry and we
@@ -134,7 +142,7 @@ func (h *ReaderHandler) StreamPage(c *fiber.Ctx) error {
 		return mapTorrentError(err)
 	}
 
-	if target.FileType != domain.FileTypeCBZ {
+	if !isArchive(target.FileType) {
 		// Legacy behavior: non-archive files ignore :page and stream whole.
 		url := fmt.Sprintf("%s/engine/stream/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
 		return h.proxyUpstream(c, url, target.MimeType, true)

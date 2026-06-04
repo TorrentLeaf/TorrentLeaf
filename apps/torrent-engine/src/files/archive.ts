@@ -1,7 +1,9 @@
 import path from 'node:path'
-import type { Readable } from 'node:stream'
+import { existsSync, statSync } from 'node:fs'
+import { Readable } from 'node:stream'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
-import type { WTFile } from '../torrent/engine.js'
+import { createExtractorFromFile } from 'node-unrar-js'
+import type { WTFile, WTTorrent } from '../torrent/engine.js'
 import { classifyFile, detectMime } from './detector.js'
 
 export interface ArchiveEntry {
@@ -115,4 +117,88 @@ export async function openCbzEntry(file: WTFile, entryIndex: number): Promise<Op
       })
     })
   })
+}
+
+// ─── CBR (RAR) support ──────────────────────────────────────────────────────
+// Unlike ZIP, RAR uses streaming headers throughout the file with no central
+// directory at the tail, so we can't read it incrementally over the swarm.
+// We require the file to be fully on disk before attempting to list/extract.
+
+interface RarFileHeader {
+  name: string
+  unpSize: number
+  flags: { directory?: boolean }
+}
+
+interface RarExtractor {
+  getFileList(): { fileHeaders: Iterable<RarFileHeader> }
+  extract(opts: { files: string[] }): { files: Iterable<{ extraction?: Uint8Array }> }
+}
+
+function assertCbrOnDisk(torrent: WTTorrent, file: WTFile): string {
+  const diskPath = path.join(torrent.path, file.path)
+  if (!existsSync(diskPath)) {
+    const err = new Error('CBR archive not yet on disk')
+    ;(err as Error & { transient?: boolean }).transient = true
+    throw err
+  }
+  const stat = statSync(diskPath)
+  if (stat.size < file.length) {
+    const err = new Error('CBR archive still downloading')
+    ;(err as Error & { transient?: boolean }).transient = true
+    throw err
+  }
+  return diskPath
+}
+
+function listImageHeaders(extractor: RarExtractor): RarFileHeader[] {
+  const headers: RarFileHeader[] = []
+  for (const h of extractor.getFileList().fileHeaders) {
+    if (h.flags?.directory) continue
+    if (classifyFile(h.name) !== 'image') continue
+    headers.push(h)
+  }
+  headers.sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }),
+  )
+  return headers
+}
+
+export async function listCbrEntries(
+  torrent: WTTorrent,
+  file: WTFile,
+): Promise<ArchiveEntry[]> {
+  const diskPath = assertCbrOnDisk(torrent, file)
+  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  return listImageHeaders(extractor).map((h, i) => ({
+    index: i,
+    name: path.posix.basename(h.name),
+    size: h.unpSize,
+    mimeType: detectMime(h.name),
+  }))
+}
+
+export async function openCbrEntry(
+  torrent: WTTorrent,
+  file: WTFile,
+  entryIndex: number,
+): Promise<OpenedEntry> {
+  const diskPath = assertCbrOnDisk(torrent, file)
+  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  const headers = listImageHeaders(extractor)
+  const target = headers[entryIndex]
+  if (!target) {
+    throw new Error(`entry ${entryIndex} out of range (${headers.length} total)`)
+  }
+  const extracted = [...extractor.extract({ files: [target.name] }).files]
+  if (extracted.length === 0 || !extracted[0].extraction) {
+    throw new Error(`failed to extract entry ${target.name}`)
+  }
+  const buf = Buffer.from(extracted[0].extraction)
+  return {
+    stream: Readable.from(buf),
+    mime: detectMime(target.name),
+    length: buf.length,
+    name: path.posix.basename(target.name),
+  }
 }
