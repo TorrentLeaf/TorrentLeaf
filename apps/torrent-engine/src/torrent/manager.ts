@@ -1,5 +1,6 @@
 import axios from 'axios'
 import Redis from 'ioredis'
+import { statfsSync } from 'node:fs'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import { analyzeFiles, isBlocked, isSafePath } from '../files/detector.js'
@@ -54,6 +55,8 @@ export class TorrentManager {
       throw new Error(`max torrents reached (${config.maxTorrents})`)
     }
 
+    this.assertDiskAvailable()
+
     const torrent = engine.add(magnetURI, downloadPath)
 
     if (torrent.ready && torrent.infoHash) {
@@ -78,6 +81,42 @@ export class TorrentManager {
       length: 0,
       downloaded: 0,
       files: [],
+    }
+  }
+
+  /**
+   * Refuse new torrents when the disk is constrained. Two independent gates:
+   *  - free-space floor: the filesystem must have at least minFreeDiskGB free,
+   *    which prevents ENOSPC regardless of the budget;
+   *  - usage budget: the bytes already downloaded across active torrents must
+   *    be under maxDiskGB.
+   * Uses the engine's in-memory byte accounting + statfs, so there's no disk
+   * walk. Throws (→ 400 at the route) with a clear message.
+   */
+  private assertDiskAvailable(): void {
+    const GB = 1024 ** 3
+
+    try {
+      const st = statfsSync(config.downloadPath)
+      const freeBytes = st.bavail * st.bsize
+      if (freeBytes < config.minFreeDiskGB * GB) {
+        throw new Error(
+          `not enough free disk space (${(freeBytes / GB).toFixed(1)} GB free, ` +
+            `minimum ${config.minFreeDiskGB} GB)`,
+        )
+      }
+    } catch (err) {
+      // Re-throw our own guard; swallow statfs failures (e.g. path not yet
+      // created) so a measurement error never blocks adds on its own.
+      if (err instanceof Error && err.message.startsWith('not enough free disk')) throw err
+    }
+
+    const usedBytes = engine.list().reduce((sum, t) => sum + (t.downloaded ?? 0), 0)
+    if (usedBytes >= config.maxDiskGB * GB) {
+      throw new Error(
+        `disk budget reached (${(usedBytes / GB).toFixed(1)} GB used, ` +
+          `limit ${config.maxDiskGB} GB)`,
+      )
     }
   }
 

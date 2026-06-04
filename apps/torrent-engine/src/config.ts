@@ -10,6 +10,9 @@ export const config = {
   downloadPath: process.env.TORRENT_DOWNLOAD_PATH ?? '/data/torrents',
   maxTorrents: Number(process.env.MAX_TORRENTS ?? 50),
   maxDiskGB: Number(process.env.MAX_DISK_GB ?? 20),
+  // Hard floor of free disk space. New torrents are refused below this,
+  // independent of the budget, so the disk can't be driven to ENOSPC.
+  minFreeDiskGB: Number(process.env.MIN_FREE_DISK_GB ?? 5),
   // Cap on the .transcode cache (full MP4s + HLS segments). Oldest entries are
   // evicted past this. 0 disables eviction.
   maxTranscodeCacheGB: Number(process.env.MAX_TRANSCODE_CACHE_GB ?? 5),
