@@ -4,6 +4,7 @@ import { registerTorrentRoutes } from './routes/torrents.js'
 import { registerStreamRoutes } from './routes/stream.js'
 import { registerArchiveRoutes } from './routes/archive.js'
 import { registerTransmuxRoutes } from './routes/transmux.js'
+import { registerMediaRoutes } from './routes/media.js'
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -38,6 +39,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await registerStreamRoutes(app)
   await registerArchiveRoutes(app)
   await registerTransmuxRoutes(app)
+  await registerMediaRoutes(app)
 
   app.setErrorHandler((err, _req, reply) => {
     app.log.error({ err }, 'request error')

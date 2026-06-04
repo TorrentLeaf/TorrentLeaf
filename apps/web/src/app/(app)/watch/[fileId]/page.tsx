@@ -2,17 +2,17 @@
 
 import { useParams, useSearchParams } from 'next/navigation'
 
-import { pageStreamURL } from '@/lib/reader'
 import { VideoPlayer } from '@/components/player/VideoPlayer'
 
 export default function WatchPage() {
   const params = useParams<{ fileId: string }>()
   const searchParams = useSearchParams()
   const fileId = params.fileId
-  const src = pageStreamURL(fileId)
 
-  // The title is passed as a query param from the torrent detail page
+  // The title is passed as a query param from the torrent detail page.
+  // The player builds its own stream URLs so it can refresh them when the
+  // user switches audio tracks; we just hand it the fileId.
   const title = searchParams.get('title') || 'Video'
 
-  return <VideoPlayer src={src} title={decodeURIComponent(title)} />
+  return <VideoPlayer fileId={fileId} title={decodeURIComponent(title)} />
 }

@@ -228,6 +228,11 @@ func registerRoutes(app *fiber.App, d deps) {
 	reader := handler.NewReaderHandler(d.log, d.readerSvc, d.engineURL)
 	api.Get("/stream/:fileId", middleware.RequireAuthWS(d.authSvc), reader.StreamFile)
 	api.Get("/stream/:fileId/:page", middleware.RequireAuthWS(d.authSvc), reader.StreamPage)
+	// Video probe + WebVTT subtitle extraction: both rely on the ?token=
+	// query string so <video> / <track> elements (which can't set headers)
+	// stay authenticated.
+	api.Get("/probe/:fileId", middleware.RequireAuthWS(d.authSvc), reader.ProbeFile)
+	api.Get("/subtitles/:fileId/:streamIndex", middleware.RequireAuthWS(d.authSvc), reader.StreamSubtitle)
 
 	// All routes below require a valid access token (cookie or bearer header)
 	// plus a per-user rate limit. The limiter sits after RequireAuth so it

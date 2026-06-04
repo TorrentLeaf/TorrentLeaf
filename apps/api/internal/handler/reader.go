@@ -159,6 +159,56 @@ func (h *ReaderHandler) StreamPage(c *fiber.Ctx) error {
 	return h.proxyUpstream(c, url, "", false)
 }
 
+// ProbeFile returns the audio/subtitle stream layout of a video file so the
+// player can render selectors. Mounted at GET /api/v1/probe/:fileId.
+func (h *ReaderHandler) ProbeFile(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fileID, err := uuid.Parse(c.Params("fileId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	if target.FileType != domain.FileTypeVideo {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "file is not a video")
+	}
+	url := fmt.Sprintf("%s/engine/probe/%s/%d", h.engineURL, target.InfoHash, target.FileIndex)
+	return h.proxyUpstream(c, url, "application/json", false)
+}
+
+// StreamSubtitle proxies a single subtitle track converted to WebVTT. The
+// player wires this URL into a <track> element. Mounted at
+// GET /api/v1/subtitles/:fileId/:streamIndex.
+func (h *ReaderHandler) StreamSubtitle(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fileID, err := uuid.Parse(c.Params("fileId"))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid fileId")
+	}
+	streamIdx, err := strconv.Atoi(c.Params("streamIndex"))
+	if err != nil || streamIdx < 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid streamIndex")
+	}
+	target, err := h.svc.ResolveStreamTarget(c.Context(), userID, fileID)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	if target.FileType != domain.FileTypeVideo {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "file is not a video")
+	}
+	url := fmt.Sprintf("%s/engine/subtitles/%s/%d/%d",
+		h.engineURL, target.InfoHash, target.FileIndex, streamIdx)
+	return h.proxyUpstream(c, url, "text/vtt; charset=utf-8", false)
+}
+
 // proxyUpstream performs the HTTP proxy to the engine, forwarding the body
 // and relevant headers. If forwardRange is true, the client's Range header
 // is copied upstream.

@@ -40,3 +40,29 @@ export function pageStreamURL(fileId: string, entryIndex?: number): string {
   }
   return `${API_BASE}/api/v1/stream/${fileId}/${entryIndex}?${qs}`
 }
+
+/** Build a video stream URL with optional audio track selection. */
+export function videoStreamURL(fileId: string, audioIndex?: number): string {
+  const token = useAuthStore.getState().accessToken ?? ''
+  const params = new URLSearchParams({ token })
+  if (audioIndex !== undefined) params.set('audio', String(audioIndex))
+  return `${API_BASE}/api/v1/stream/${fileId}?${params.toString()}`
+}
+
+/** WebVTT URL for a single subtitle track (referenced by <track src>). */
+export function subtitleURL(fileId: string, streamIndex: number): string {
+  const token = useAuthStore.getState().accessToken ?? ''
+  return `${API_BASE}/api/v1/subtitles/${fileId}/${streamIndex}?token=${encodeURIComponent(token)}`
+}
+
+export interface VideoTrackInfo {
+  index: number
+  codec: string
+  language: string | null
+  title: string | null
+}
+
+export interface VideoMediaInfo {
+  audio: VideoTrackInfo[]
+  subtitles: VideoTrackInfo[]
+}

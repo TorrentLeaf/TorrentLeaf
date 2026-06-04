@@ -1,6 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft,
@@ -14,21 +15,22 @@ import {
   SkipForward,
   Loader2,
   Subtitles,
+  AudioLines,
 } from 'lucide-react'
 
-// ─── Types ─────────────────────────────────────────────
+import { api } from '@/lib/api'
+import {
+  videoStreamURL,
+  subtitleURL,
+  type VideoMediaInfo,
+  type VideoTrackInfo,
+} from '@/lib/reader'
+
 interface VideoPlayerProps {
-  /** API stream URL for the video file. */
-  src: string
+  /** File ID — the player builds stream + subtitle URLs from this. */
+  fileId: string
   /** Title to show in the overlay. */
   title: string
-}
-
-interface TrackInfo {
-  index: number
-  label: string
-  language: string
-  kind: string
 }
 
 const AUTO_HIDE_MS = 3500
@@ -46,11 +48,22 @@ function formatTime(s: number): string {
   return `${m}:${ss}`
 }
 
-export function VideoPlayer({ src, title }: VideoPlayerProps) {
+function labelFor(t: VideoTrackInfo): string {
+  if (t.title && t.language) return `${t.language.toUpperCase()} · ${t.title}`
+  if (t.title) return t.title
+  if (t.language) return t.language.toUpperCase()
+  return `Track ${t.index}`
+}
+
+const SUB_OFF = -1 // sentinel for "subtitles disabled"
+
+export function VideoPlayer({ fileId, title }: VideoPlayerProps) {
   const router = useRouter()
   const containerRef = useRef<HTMLDivElement>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Saved when the user switches audio so we can seek back after the reload.
+  const resumeTimeRef = useRef<number>(0)
 
   const [playing, setPlaying] = useState(false)
   const [muted, setMuted] = useState(false)
@@ -61,19 +74,35 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [audioTracks, setAudioTracks] = useState<TrackInfo[]>([])
-  const [activeAudioTrack, setActiveAudioTrack] = useState(0)
-  const [showTrackMenu, setShowTrackMenu] = useState(false)
   const [buffered, setBuffered] = useState(0)
+  const [activeAudio, setActiveAudio] = useState<number | undefined>(undefined)
+  const [activeSubtitle, setActiveSubtitle] = useState<number>(SUB_OFF)
+  const [openMenu, setOpenMenu] = useState<'audio' | 'subs' | null>(null)
+
+  // ── Probe (audio + subtitle tracks) ───────────────────
+  const tracksQuery = useQuery<VideoMediaInfo>({
+    queryKey: ['video-probe', fileId],
+    queryFn: async () => (await api.get<VideoMediaInfo>(`/probe/${fileId}`)).data,
+    retry: (failureCount, err) => {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (status === 503) return failureCount < 10
+      return failureCount < 1
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000),
+  })
+  const audioTracks = tracksQuery.data?.audio ?? []
+  const subtitleTracks = tracksQuery.data?.subtitles ?? []
+
+  const src = useMemo(() => videoStreamURL(fileId, activeAudio), [fileId, activeAudio])
 
   // ── Auto-hide overlay ─────────────────────────────────
   const resetHideTimer = useCallback(() => {
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setOverlayVisible(true)
     hideTimer.current = setTimeout(() => {
-      if (playing && !showTrackMenu) setOverlayVisible(false)
+      if (playing && openMenu === null) setOverlayVisible(false)
     }, AUTO_HIDE_MS)
-  }, [playing, showTrackMenu])
+  }, [playing, openMenu])
 
   useEffect(() => {
     resetHideTimer()
@@ -97,7 +126,17 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
     const onPlay = () => { setPlaying(true); setLoading(false); setError(null) }
     const onPause = () => setPlaying(false)
     const onWaiting = () => setLoading(true)
-    const onCanPlay = () => { setLoading(false); setError(null) }
+    const onCanPlay = () => {
+      setLoading(false)
+      setError(null)
+      // After an audio switch the new stream starts at 0; seek back to where
+      // the user was before the swap (resumeTimeRef is set in handleAudioPick).
+      if (resumeTimeRef.current > 0) {
+        const target = resumeTimeRef.current
+        resumeTimeRef.current = 0
+        try { v.currentTime = target } catch { /* ignore */ }
+      }
+    }
     const onError = () => {
       setLoading(false)
       const mediaErr = v.error
@@ -115,23 +154,6 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
       }
     }
 
-    // Detect audio tracks when available
-    const onLoadedMetadata = () => {
-      const audioTrackList = (v as unknown as { audioTracks?: { length: number; [i: number]: { label: string; language: string; kind: string; enabled: boolean } } }).audioTracks
-      if (audioTrackList && audioTrackList.length > 0) {
-        const tracks: TrackInfo[] = []
-        for (let i = 0; i < audioTrackList.length; i++) {
-          tracks.push({
-            index: i,
-            label: audioTrackList[i].label || `Track ${i + 1}`,
-            language: audioTrackList[i].language || 'unknown',
-            kind: audioTrackList[i].kind,
-          })
-        }
-        setAudioTracks(tracks)
-      }
-    }
-
     v.addEventListener('timeupdate', onTime)
     v.addEventListener('durationchange', onDuration)
     v.addEventListener('play', onPlay)
@@ -139,7 +161,6 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
     v.addEventListener('waiting', onWaiting)
     v.addEventListener('canplay', onCanPlay)
     v.addEventListener('error', onError)
-    v.addEventListener('loadedmetadata', onLoadedMetadata)
 
     return () => {
       v.removeEventListener('timeupdate', onTime)
@@ -149,9 +170,19 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
       v.removeEventListener('waiting', onWaiting)
       v.removeEventListener('canplay', onCanPlay)
       v.removeEventListener('error', onError)
-      v.removeEventListener('loadedmetadata', onLoadedMetadata)
     }
   }, [])
+
+  // ── Subtitle track enable/disable ─────────────────────
+  // textTracks is a live list — toggling .mode picks which one renders.
+  useEffect(() => {
+    const v = videoRef.current
+    if (!v) return
+    for (let i = 0; i < v.textTracks.length; i++) {
+      const tt = v.textTracks[i]
+      tt.mode = i === activeSubtitle ? 'showing' : 'disabled'
+    }
+  }, [activeSubtitle, subtitleTracks.length])
 
   // ── Controls ──────────────────────────────────────────
   const togglePlay = useCallback(() => {
@@ -208,6 +239,13 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
     return () => document.removeEventListener('fullscreenchange', onChange)
   }, [])
 
+  const handleAudioPick = useCallback((streamIndex: number) => {
+    const v = videoRef.current
+    if (v) resumeTimeRef.current = v.currentTime
+    setActiveAudio(streamIndex)
+    setOpenMenu(null)
+  }, [])
+
   // ── Keyboard shortcuts ────────────────────────────────
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -242,7 +280,7 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
           toggleFullscreen()
           break
         case 'Escape':
-          if (showTrackMenu) setShowTrackMenu(false)
+          if (openMenu !== null) setOpenMenu(null)
           else if (document.fullscreenElement) document.exitFullscreen()
           else router.back()
           break
@@ -250,7 +288,7 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [togglePlay, toggleMute, toggleFullscreen, skip, changeVolume, volume, router, showTrackMenu])
+  }, [togglePlay, toggleMute, toggleFullscreen, skip, changeVolume, volume, router, openMenu])
 
   const progressPct = duration > 0 ? (currentTime / duration) * 100 : 0
 
@@ -265,7 +303,8 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
         }
       }}
     >
-      {/* Video element */}
+      {/* Video element. Subtitle tracks are children so they're registered
+          with the video.textTracks list at mount time. */}
       <video
         ref={videoRef}
         src={src}
@@ -273,22 +312,32 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
         playsInline
         preload="auto"
         autoPlay
-      />
+        crossOrigin="anonymous"
+      >
+        {subtitleTracks.map((t, i) => (
+          <track
+            key={`${fileId}:${t.index}`}
+            kind="subtitles"
+            srcLang={t.language ?? undefined}
+            label={labelFor(t)}
+            src={subtitleURL(fileId, t.index)}
+            default={i === activeSubtitle}
+          />
+        ))}
+      </video>
 
-      {/* Loading spinner */}
       {loading && !error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <Loader2 className="h-12 w-12 animate-spin text-white/60" />
         </div>
       )}
 
-      {/* Error state */}
       {error && (
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center space-y-3 max-w-sm">
             <p className="text-white/80 text-base">{error}</p>
             <p className="text-white/40 text-xs">
-              MKV files with HEVC codec may require transmuxing. The video will stream through ffmpeg automatically.
+              The server will transmux this file through ffmpeg. If this keeps failing the source codec may be unsupported.
             </p>
             <button
               onClick={() => { setError(null); videoRef.current?.load() }}
@@ -402,33 +451,79 @@ export function VideoPlayer({ src, title }: VideoPlayerProps) {
           </div>
 
           <div className="flex items-center gap-1">
-            {/* Audio tracks button */}
+            {/* Audio tracks button — only shown when there's a choice to make */}
             {audioTracks.length > 1 && (
               <div className="relative">
                 <button
-                  onClick={() => setShowTrackMenu(!showTrackMenu)}
-                  className="rounded-full p-2 text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+                  onClick={() => setOpenMenu(openMenu === 'audio' ? null : 'audio')}
+                  className={`rounded-full p-2 transition-colors ${
+                    openMenu === 'audio'
+                      ? 'bg-white/10 text-white'
+                      : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  }`}
                   aria-label="Audio tracks"
                 >
-                  <Subtitles className="h-5 w-5" />
+                  <AudioLines className="h-5 w-5" />
                 </button>
-                {showTrackMenu && (
-                  <div className="absolute bottom-full right-0 mb-2 min-w-[180px] rounded-lg bg-black/90 border border-white/10 py-1 shadow-2xl">
+                {openMenu === 'audio' && (
+                  <div className="absolute bottom-full right-0 mb-2 min-w-[220px] rounded-lg bg-black/90 border border-white/10 py-1 shadow-2xl">
                     <p className="px-3 py-1 text-xs text-white/40 uppercase tracking-wider">Audio</p>
                     {audioTracks.map((t) => (
                       <button
                         key={t.index}
-                        onClick={() => {
-                          setActiveAudioTrack(t.index)
-                          setShowTrackMenu(false)
-                        }}
+                        onClick={() => handleAudioPick(t.index)}
                         className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${
-                          activeAudioTrack === t.index
+                          activeAudio === t.index || (activeAudio === undefined && t === audioTracks[0])
                             ? 'bg-white/10 text-white'
                             : 'text-white/60 hover:bg-white/5 hover:text-white'
                         }`}
                       >
-                        {t.label} ({t.language})
+                        {labelFor(t)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Subtitle tracks — shows even with one option so the user can disable */}
+            {subtitleTracks.length > 0 && (
+              <div className="relative">
+                <button
+                  onClick={() => setOpenMenu(openMenu === 'subs' ? null : 'subs')}
+                  className={`rounded-full p-2 transition-colors ${
+                    openMenu === 'subs' || activeSubtitle !== SUB_OFF
+                      ? 'bg-white/10 text-white'
+                      : 'text-white/70 hover:bg-white/10 hover:text-white'
+                  }`}
+                  aria-label="Subtitles"
+                >
+                  <Subtitles className="h-5 w-5" />
+                </button>
+                {openMenu === 'subs' && (
+                  <div className="absolute bottom-full right-0 mb-2 max-h-72 min-w-[220px] overflow-y-auto rounded-lg bg-black/90 border border-white/10 py-1 shadow-2xl">
+                    <p className="px-3 py-1 text-xs text-white/40 uppercase tracking-wider">Subtitles</p>
+                    <button
+                      onClick={() => { setActiveSubtitle(SUB_OFF); setOpenMenu(null) }}
+                      className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${
+                        activeSubtitle === SUB_OFF
+                          ? 'bg-white/10 text-white'
+                          : 'text-white/60 hover:bg-white/5 hover:text-white'
+                      }`}
+                    >
+                      Off
+                    </button>
+                    {subtitleTracks.map((t, i) => (
+                      <button
+                        key={t.index}
+                        onClick={() => { setActiveSubtitle(i); setOpenMenu(null) }}
+                        className={`w-full px-3 py-1.5 text-left text-sm transition-colors ${
+                          activeSubtitle === i
+                            ? 'bg-white/10 text-white'
+                            : 'text-white/60 hover:bg-white/5 hover:text-white'
+                        }`}
+                      >
+                        {labelFor(t)}
                       </button>
                     ))}
                   </div>

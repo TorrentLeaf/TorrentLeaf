@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
-import { existsSync, createReadStream as fsCreateReadStream, statSync } from 'fs'
+import { existsSync, statSync } from 'fs'
 import { join } from 'path'
 import { spawn } from 'child_process'
 import { engine } from '../../torrent/engine.js'
@@ -63,9 +63,18 @@ function videoArgs(probe: VideoProbe): string[] {
 }
 
 export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Params: { infoHash: string; fileIndex: string } }>(
+  app.get<{
+    Params: { infoHash: string; fileIndex: string }
+    Querystring: { audio?: string }
+  }>(
     '/engine/transmux/:infoHash/:fileIndex',
-    async (req: FastifyRequest<{ Params: { infoHash: string; fileIndex: string } }>, reply: FastifyReply) => {
+    async (
+      req: FastifyRequest<{
+        Params: { infoHash: string; fileIndex: string }
+        Querystring: { audio?: string }
+      }>,
+      reply: FastifyReply,
+    ) => {
       const { infoHash, fileIndex } = req.params
       const torrent = engine.get(infoHash)
       if (!torrent) {
@@ -95,15 +104,31 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
 
       const probe = await probeVideo(diskPath)
       const vArgs = videoArgs(probe)
+
+      // Audio selection: ?audio=<absoluteStreamIndex> picks a specific track
+      // (multi-language MKVs expose several). Default to the first audio
+      // stream when no override is given.
+      const audioIdxRaw = req.query.audio
+      const audioIdx = audioIdxRaw !== undefined && /^\d+$/.test(audioIdxRaw)
+        ? Number(audioIdxRaw)
+        : null
+      const audioMap = audioIdx !== null ? `0:${audioIdx}` : '0:a:0'
+
       logger.info(
-        { infoHash, fileIndex: index, name: file.name, codec: probe.codec, pixFmt: probe.pixFmt, transcode: vArgs[1] !== 'copy' },
+        {
+          infoHash, fileIndex: index, name: file.name,
+          codec: probe.codec, pixFmt: probe.pixFmt,
+          transcode: vArgs[1] !== 'copy',
+          audioMap,
+        },
         'starting transmux',
       )
 
-      const inputStream = fsCreateReadStream(diskPath)
-
       const ffmpeg = spawn('ffmpeg', [
-        '-i', 'pipe:0',
+        '-loglevel', 'error',
+        '-i', diskPath,
+        '-map', '0:v:0',
+        '-map', audioMap,
         ...vArgs,
         '-c:a', 'aac',
         '-b:a', '192k',
@@ -112,10 +137,8 @@ export async function registerTransmuxRoutes(app: FastifyInstance): Promise<void
         '-f', 'mp4',
         'pipe:1',
       ], {
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
       })
-
-      inputStream.pipe(ffmpeg.stdin)
 
       ffmpeg.stderr.on('data', (data: Buffer) => {
         const msg = data.toString()
