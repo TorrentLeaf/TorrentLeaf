@@ -18,10 +18,14 @@ import {
 
 export interface MangaReaderProps {
   sessionId: string
+  /** Filter the reader to a single file (CBZ chapter). */
   fileId?: string
+  /** Load every page in the session, then seek to the page belonging to
+   *  this file. Used for loose-image torrents where each file is one page. */
+  startFile?: string
 }
 
-export function MangaReader({ sessionId, fileId }: MangaReaderProps) {
+export function MangaReader({ sessionId, fileId, startFile }: MangaReaderProps) {
   const webtoonRef = useRef<HTMLDivElement>(null)
 
   // ── Data ──────────────────────────────────────────────
@@ -59,16 +63,26 @@ export function MangaReader({ sessionId, fileId }: MangaReaderProps) {
   const [brightness, setBrightness] = useState(100) // %
   const [restored, setRestored] = useState(false)
 
-  // Restore progress
+  // Restore progress (or, if the user opened via a per-file deep link,
+  // seek to that file instead — explicit navigation wins over history).
   useEffect(() => {
-    if (!restored && progress && totalPages > 0) {
+    if (restored || totalPages === 0) return
+    if (startFile) {
+      const target = pages.findIndex((p) => p.fileId === startFile)
+      if (target >= 0) {
+        setCurrentPage(target)
+        setRestored(true)
+        return
+      }
+    }
+    if (progress) {
       if (progress.currentPage > 0 && progress.currentPage < totalPages) {
         setCurrentPage(progress.currentPage)
       }
       if (progress.readingMode) setMode(progress.readingMode)
       setRestored(true)
     }
-  }, [progress, restored, totalPages])
+  }, [progress, restored, totalPages, startFile, pages])
 
   useMangaPreload(pages, currentPage)
 
