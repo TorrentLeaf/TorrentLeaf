@@ -14,6 +14,12 @@ export interface EpubReaderProps {
   fileId: string
 }
 
+// EPUB only has two meaningful layouts: classic paginated columns, or one
+// continuous scroll (epub.js `scrolled-doc`). We map the shared reader
+// `defaultReadingMode` onto these: `webtoon` -> scrolled, everything else
+// -> paginated.
+type EpubMode = 'paginated' | 'scrolled'
+
 const FONT_MIN = 80
 const FONT_MAX = 200
 const FONT_STEP = 10
@@ -22,32 +28,32 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
   const viewerRef = useRef<HTMLDivElement>(null)
   const bookRef = useRef<Book | null>(null)
   const renditionRef = useRef<Rendition | null>(null)
+  // Mirror of the latest CFI so we can re-anchor the rendition when the mode
+  // changes without waiting on the (async) saved-progress query.
+  const currentCfiRef = useRef<string | null>(null)
 
   const { progress, save } = useReadingProgress(fileId)
   const { settings } = useUserSettings()
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [buffer, setBuffer] = useState<ArrayBuffer | null>(null)
   const [background, setBackground] = useState(settings.readerBackground || '#1a1a2e')
   const [fontSize, setFontSize] = useState(100)
+  const [mode, setMode] = useState<EpubMode>(
+    settings.defaultReadingMode === 'webtoon' ? 'scrolled' : 'paginated',
+  )
   const [title, setTitle] = useState('EPUB Reader')
-  const [currentCfi, setCurrentCfi] = useState<string | null>(null)
 
-  // ── Init book ─────────────────────────────────────────
+  // ── Fetch the EPUB bytes once ─────────────────────────
+  // Given a plain URL (our /stream/:id has no .epub extension) epub.js guesses
+  // it's an *unpacked directory* and looks for META-INF/container.xml relative
+  // to it, which 404s and leaves the reader spinning forever. An ArrayBuffer is
+  // unambiguously a packaged epub. We fetch it a single time and reuse it when
+  // the reading mode changes — only the rendition gets rebuilt, not the fetch.
   useEffect(() => {
-    const host = viewerRef.current
-    if (!host) return
-
     let cancelled = false
-    let book: Book | null = null
-    let rendition: Rendition | null = null
 
     const load = async () => {
-      // Fetch the EPUB bytes ourselves and hand epub.js an ArrayBuffer. Given
-      // a plain URL (our /stream/:id has no .epub extension) epub.js guesses
-      // it's an *unpacked directory* and looks for META-INF/container.xml
-      // relative to it, which 404s and leaves the reader spinning forever. An
-      // ArrayBuffer is unambiguously a packaged epub.
-      let buf: ArrayBuffer
       while (true) {
         try {
           const res = await fetch(pageStreamURL(fileId))
@@ -61,76 +67,100 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
             setError(`Failed to fetch EPUB (HTTP ${res.status})`)
             return
           }
-          buf = await res.arrayBuffer()
-          break
+          const buf = await res.arrayBuffer()
+          if (!cancelled) setBuffer(buf)
+          return
         } catch (err) {
           if (cancelled) return
           setError((err as Error).message || 'Failed to fetch EPUB')
           return
         }
       }
-      if (cancelled) return
-
-      book = ePub(buf)
-      bookRef.current = book
-
-      rendition = book.renderTo(host, {
-        width: '100%',
-        height: '100%',
-        flow: 'paginated',
-        spread: 'auto',
-        allowScriptedContent: false,
-      })
-      renditionRef.current = rendition
-
-      // Style the book content for dark mode
-      rendition.themes.default({
-        body: {
-          color: '#e0e0e0 !important',
-          'background-color': 'transparent !important',
-        },
-        'a, a:link, a:visited': {
-          color: '#90caf9 !important',
-        },
-      })
-
-      const startAt =
-        progress?.location && progress.location.length > 0
-          ? progress.location
-          : undefined
-
-      rendition
-        .display(startAt)
-        .then(() => !cancelled && setReady(true))
-        .catch((err: unknown) => {
-          if (!cancelled) setError((err as Error).message || 'Failed to render EPUB')
-        })
-
-      // Read metadata for title
-      book.loaded.metadata.then((meta) => {
-        if (!cancelled && meta.title) setTitle(meta.title)
-      })
-
-      // Persist CFI on every relocation
-      rendition.on('relocated', (loc: { start: { cfi: string } }) => {
-        if (loc?.start?.cfi) {
-          setCurrentCfi(loc.start.cfi)
-          save({ currentPage: 0, location: loc.start.cfi })
-        }
-      })
     }
 
     void load()
+    return () => {
+      cancelled = true
+    }
+  }, [fileId])
+
+  // ── Build the book from the bytes ─────────────────────
+  useEffect(() => {
+    if (!buffer) return
+    const book = ePub(buffer)
+    bookRef.current = book
+
+    let cancelled = false
+    book.loaded.metadata.then((meta) => {
+      if (!cancelled && meta.title) setTitle(meta.title)
+    })
 
     return () => {
       cancelled = true
-      rendition?.destroy()
-      book?.destroy()
+      book.destroy()
       bookRef.current = null
-      renditionRef.current = null
     }
+  }, [buffer])
+
+  // ── Render (rebuilds only when bytes or mode change) ──
+  useEffect(() => {
+    const host = viewerRef.current
+    const book = bookRef.current
+    if (!buffer || !book || !host) return
+
+    let cancelled = false
+    setReady(false)
+
+    const rendition = book.renderTo(host, {
+      width: '100%',
+      height: '100%',
+      flow: mode === 'scrolled' ? 'scrolled-doc' : 'paginated',
+      spread: mode === 'scrolled' ? 'none' : 'auto',
+      allowScriptedContent: false,
+    })
+    renditionRef.current = rendition
+
+    // Style the book content for dark mode
+    rendition.themes.default({
+      body: {
+        color: '#e0e0e0 !important',
+        'background-color': 'transparent !important',
+      },
+      'a, a:link, a:visited': {
+        color: '#90caf9 !important',
+      },
+    })
+    rendition.themes.fontSize(`${fontSize}%`)
+
+    // Re-anchor at the last known position so switching modes doesn't lose the
+    // reader's place; fall back to saved progress on first render.
+    const startAt =
+      currentCfiRef.current ||
+      (progress?.location && progress.location.length > 0 ? progress.location : undefined)
+
+    rendition
+      .display(startAt)
+      .then(() => !cancelled && setReady(true))
+      .catch((err: unknown) => {
+        if (!cancelled) setError((err as Error).message || 'Failed to render EPUB')
+      })
+
+    // Persist CFI on every relocation
+    rendition.on('relocated', (loc: { start: { cfi: string } }) => {
+      if (loc?.start?.cfi) {
+        currentCfiRef.current = loc.start.cfi
+        save({ currentPage: 0, location: loc.start.cfi })
+      }
+    })
+
+    return () => {
+      cancelled = true
+      rendition.destroy()
+      if (renditionRef.current === rendition) renditionRef.current = null
+    }
+    // fontSize is applied live by the effect below; don't rebuild on it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fileId])
+  }, [buffer, mode])
 
   // ── Font size changes ─────────────────────────────────
   useEffect(() => {
@@ -168,6 +198,28 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
       onPrev={goPrev}
       onNext={goNext}
       settingsExtra={
+        <>
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted))]">
+            Reading mode
+          </h4>
+          <div className="flex flex-wrap gap-1.5">
+            {(['paginated', 'scrolled'] as EpubMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`rounded-md border px-2.5 py-1 text-sm transition-all ${
+                  mode === m
+                    ? 'border-[hsl(var(--accent))] bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))]'
+                    : 'border-[hsl(var(--border))] text-[hsl(var(--muted))] hover:border-[hsl(var(--accent))]/40'
+                }`}
+              >
+                {m === 'paginated' ? 'Paginated' : 'Scrolled'}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="space-y-2">
           <h4 className="text-xs font-medium uppercase tracking-wider text-[hsl(var(--muted))]">
             Font size
@@ -197,6 +249,7 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
             </button>
           </div>
         </div>
+        </>
       }
     >
       <div className="relative h-full w-full">
