@@ -37,58 +37,95 @@ export function EpubReader({ sessionId, fileId }: EpubReaderProps) {
     const host = viewerRef.current
     if (!host) return
 
-    const url = pageStreamURL(fileId)
-    const book = ePub(url)
-    bookRef.current = book
+    let cancelled = false
+    let book: Book | null = null
+    let rendition: Rendition | null = null
 
-    const rendition = book.renderTo(host, {
-      width: '100%',
-      height: '100%',
-      flow: 'paginated',
-      spread: 'auto',
-      allowScriptedContent: false,
-    })
-    renditionRef.current = rendition
+    const load = async () => {
+      // Fetch the EPUB bytes ourselves and hand epub.js an ArrayBuffer. Given
+      // a plain URL (our /stream/:id has no .epub extension) epub.js guesses
+      // it's an *unpacked directory* and looks for META-INF/container.xml
+      // relative to it, which 404s and leaves the reader spinning forever. An
+      // ArrayBuffer is unambiguously a packaged epub.
+      let buf: ArrayBuffer
+      while (true) {
+        try {
+          const res = await fetch(pageStreamURL(fileId))
+          if (cancelled) return
+          if (res.status === 503) {
+            const retry = Number(res.headers.get('Retry-After')) || 5
+            await new Promise((r) => setTimeout(r, retry * 1000))
+            continue
+          }
+          if (!res.ok) {
+            setError(`Failed to fetch EPUB (HTTP ${res.status})`)
+            return
+          }
+          buf = await res.arrayBuffer()
+          break
+        } catch (err) {
+          if (cancelled) return
+          setError((err as Error).message || 'Failed to fetch EPUB')
+          return
+        }
+      }
+      if (cancelled) return
 
-    // Style the book content for dark mode
-    rendition.themes.default({
-      body: {
-        color: '#e0e0e0 !important',
-        'background-color': 'transparent !important',
-      },
-      'a, a:link, a:visited': {
-        color: '#90caf9 !important',
-      },
-    })
+      book = ePub(buf)
+      bookRef.current = book
 
-    const startAt =
-      progress?.location && progress.location.length > 0
-        ? progress.location
-        : undefined
+      rendition = book.renderTo(host, {
+        width: '100%',
+        height: '100%',
+        flow: 'paginated',
+        spread: 'auto',
+        allowScriptedContent: false,
+      })
+      renditionRef.current = rendition
 
-    rendition
-      .display(startAt)
-      .then(() => setReady(true))
-      .catch((err: unknown) => {
-        setError((err as Error).message || 'Failed to render EPUB')
+      // Style the book content for dark mode
+      rendition.themes.default({
+        body: {
+          color: '#e0e0e0 !important',
+          'background-color': 'transparent !important',
+        },
+        'a, a:link, a:visited': {
+          color: '#90caf9 !important',
+        },
       })
 
-    // Read metadata for title
-    book.loaded.metadata.then((meta) => {
-      if (meta.title) setTitle(meta.title)
-    })
+      const startAt =
+        progress?.location && progress.location.length > 0
+          ? progress.location
+          : undefined
 
-    // Persist CFI on every relocation
-    rendition.on('relocated', (loc: { start: { cfi: string } }) => {
-      if (loc?.start?.cfi) {
-        setCurrentCfi(loc.start.cfi)
-        save({ currentPage: 0, location: loc.start.cfi })
-      }
-    })
+      rendition
+        .display(startAt)
+        .then(() => !cancelled && setReady(true))
+        .catch((err: unknown) => {
+          if (!cancelled) setError((err as Error).message || 'Failed to render EPUB')
+        })
+
+      // Read metadata for title
+      book.loaded.metadata.then((meta) => {
+        if (!cancelled && meta.title) setTitle(meta.title)
+      })
+
+      // Persist CFI on every relocation
+      rendition.on('relocated', (loc: { start: { cfi: string } }) => {
+        if (loc?.start?.cfi) {
+          setCurrentCfi(loc.start.cfi)
+          save({ currentPage: 0, location: loc.start.cfi })
+        }
+      })
+    }
+
+    void load()
 
     return () => {
-      rendition.destroy()
-      book.destroy()
+      cancelled = true
+      rendition?.destroy()
+      book?.destroy()
       bookRef.current = null
       renditionRef.current = null
     }
