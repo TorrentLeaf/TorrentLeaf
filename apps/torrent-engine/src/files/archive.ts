@@ -152,6 +152,31 @@ function assertCbrOnDisk(torrent: WTTorrent, file: WTFile): string {
   return diskPath
 }
 
+// Creating a node-unrar-js extractor reads the entire RAR into the wasm heap,
+// so doing it per page request is O(archiveSize) per page — the main reason CBR
+// paging felt slow. Memoize the extractor by disk path (invalidated if the file
+// size changes, e.g. it was still downloading). Bounded to a couple of archives
+// since each holds its whole file in memory.
+const CBR_EXTRACTOR_MAX = 2
+const cbrExtractors = new Map<string, { size: number; extractor: RarExtractor }>()
+
+async function getCbrExtractor(diskPath: string, size: number): Promise<RarExtractor> {
+  const cached = cbrExtractors.get(diskPath)
+  if (cached && cached.size === size) {
+    cbrExtractors.delete(diskPath)
+    cbrExtractors.set(diskPath, cached) // bump to most-recently-used
+    return cached.extractor
+  }
+  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  cbrExtractors.set(diskPath, { size, extractor })
+  while (cbrExtractors.size > CBR_EXTRACTOR_MAX) {
+    const oldest = cbrExtractors.keys().next().value
+    if (oldest === undefined) break
+    cbrExtractors.delete(oldest)
+  }
+  return extractor
+}
+
 function listImageHeaders(extractor: RarExtractor): RarFileHeader[] {
   const headers: RarFileHeader[] = []
   for (const h of extractor.getFileList().fileHeaders) {
@@ -170,7 +195,7 @@ export async function listCbrEntries(
   file: WTFile,
 ): Promise<ArchiveEntry[]> {
   const diskPath = assertCbrOnDisk(torrent, file)
-  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  const extractor = await getCbrExtractor(diskPath, file.length)
   return listImageHeaders(extractor).map((h, i) => ({
     index: i,
     name: path.posix.basename(h.name),
@@ -185,7 +210,7 @@ export async function openCbrEntry(
   entryIndex: number,
 ): Promise<OpenedEntry> {
   const diskPath = assertCbrOnDisk(torrent, file)
-  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  const extractor = await getCbrExtractor(diskPath, file.length)
   const headers = listImageHeaders(extractor)
   const target = headers[entryIndex]
   if (!target) {
@@ -267,11 +292,20 @@ function parseSlt(text: string): SevenZEntry[] {
   return entries
 }
 
-export async function listSevenZEntries(
-  torrent: WTTorrent,
-  file: WTFile,
-): Promise<ArchiveEntry[]> {
-  const diskPath = reuseAssertOnDisk(torrent, file)
+// Listing a 7z spawns a process that scans the whole archive. openSevenZEntry
+// needs the same (full-path, image-only, sorted) list to map an entry index to
+// its archive path, so without memoization every page paid for a `7z l` on top
+// of its `7z x`. Memoize by disk path (invalidated on size change).
+const SEVENZ_LIST_MAX = 16
+const sevenZLists = new Map<string, { size: number; entries: SevenZEntry[] }>()
+
+async function getSevenZImageList(diskPath: string, size: number): Promise<SevenZEntry[]> {
+  const cached = sevenZLists.get(diskPath)
+  if (cached && cached.size === size) {
+    sevenZLists.delete(diskPath)
+    sevenZLists.set(diskPath, cached) // bump to most-recently-used
+    return cached.entries
+  }
   const { stdout, stderr, code } = await run7z(['l', '-slt', '--', diskPath])
   if (code !== 0) {
     throw new Error(`7z list failed (code ${code}): ${stderr.trim()}`)
@@ -281,6 +315,21 @@ export async function listSevenZEntries(
     .sort((a, b) =>
       a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }),
     )
+  sevenZLists.set(diskPath, { size, entries })
+  while (sevenZLists.size > SEVENZ_LIST_MAX) {
+    const oldest = sevenZLists.keys().next().value
+    if (oldest === undefined) break
+    sevenZLists.delete(oldest)
+  }
+  return entries
+}
+
+export async function listSevenZEntries(
+  torrent: WTTorrent,
+  file: WTFile,
+): Promise<ArchiveEntry[]> {
+  const diskPath = reuseAssertOnDisk(torrent, file)
+  const entries = await getSevenZImageList(diskPath, file.length)
   return entries.map((e, i) => ({
     index: i,
     name: path.posix.basename(e.path),
@@ -296,17 +345,7 @@ export async function openSevenZEntry(
 ): Promise<OpenedEntry> {
   const diskPath = reuseAssertOnDisk(torrent, file)
   // List first so we can map entryIndex (image-only, sorted) → archive path.
-  const { stdout: listOut, stderr: listErr, code: listCode } = await run7z(
-    ['l', '-slt', '--', diskPath],
-  )
-  if (listCode !== 0) {
-    throw new Error(`7z list failed (code ${listCode}): ${listErr.trim()}`)
-  }
-  const all = parseSlt(listOut.toString())
-    .filter((e) => classifyFile(e.path) === 'image')
-    .sort((a, b) =>
-      a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }),
-    )
+  const all = await getSevenZImageList(diskPath, file.length)
   const target = all[entryIndex]
   if (!target) {
     throw new Error(`entry ${entryIndex} out of range (${all.length} total)`)

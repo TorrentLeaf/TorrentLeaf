@@ -13,6 +13,7 @@ import {
   type ArchiveEntry,
   type OpenedEntry,
 } from '../../files/archive.js'
+import { getCachedListing, getCachedEntryBytes } from '../../files/archiveCache.js'
 
 // Drains an entire Readable into a Buffer. We use it for CBZ entries rather
 // than streaming directly to Fastify's reply because yauzl's read streams are
@@ -104,9 +105,10 @@ export async function registerArchiveRoutes(app: FastifyInstance): Promise<void>
       // Prioritize this file so the central directory (end of file) and the
       // entries we subsequently stream can be satisfied from the swarm.
       r.file.select(1)
+      const key = `${req.params.infoHash}:${req.params.fileIndex}`
       try {
         const entries = await withTimeout(
-          listEntries(r),
+          getCachedListing(key, () => listEntries(r)),
           ARCHIVE_READ_TIMEOUT_MS,
           'list entries',
         )
@@ -132,25 +134,25 @@ export async function registerArchiveRoutes(app: FastifyInstance): Promise<void>
       }
 
       r.file.select(1)
+      const key = `${req.params.infoHash}:${req.params.fileIndex}:${entryIdx}`
       try {
         const entry = await withTimeout(
-          openEntry(r, entryIdx),
+          getCachedEntryBytes(key, async () => {
+            const opened = await openEntry(r, entryIdx)
+            const buf = await streamToBuffer(opened.stream)
+            return { buf, mime: opened.mime, name: opened.name }
+          }),
           ARCHIVE_READ_TIMEOUT_MS,
           'open entry',
-        )
-        const body = await withTimeout(
-          streamToBuffer(entry.stream),
-          ARCHIVE_READ_TIMEOUT_MS,
-          'drain entry',
         )
         reply
           .status(200)
           .headers({
             'Content-Type': entry.mime,
-            'Content-Length': String(body.length),
+            'Content-Length': String(entry.buf.length),
             'Cache-Control': 'public, max-age=3600',
           })
-          .send(body)
+          .send(entry.buf)
       } catch (err) {
         app.log.warn({ err }, 'failed to open archive entry')
         reply.status(503).send({ error: 'archive entry not ready, retry' })

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { torrentManager } from '../../torrent/manager.js'
 import { clearTranscodeCache } from '../../files/transcodeCache.js'
+import { clearArchiveCache } from '../../files/archiveCache.js'
 
 const AddBody = z.object({
   magnetURI: z
@@ -47,6 +48,7 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
       try {
         await torrentManager.remove(req.params.infoHash)
         clearTranscodeCache(req.params.infoHash)
+        clearArchiveCache(req.params.infoHash)
         reply.status(204).send()
       } catch (err) {
         reply.status(404).send({ error: (err as Error).message })
