@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { existsSync, statSync, createReadStream } from 'fs'
 import { parseRange, streamFile } from './streamer.js'
 
 // ── parseRange (pure function — no mocks needed) ────────────────────────
@@ -55,26 +56,47 @@ describe('parseRange', () => {
   })
 })
 
-// ── streamFile (integration with engine mock) ───────────────────────────
+// ── streamFile (integration with engine + fs mocks) ─────────────────────
+// streamFile reads completed files straight from disk (see streamer.ts): it
+// resolves <torrent.path>/<file.path>, hijacks the reply and writes to
+// reply.raw, falling back to a 503 retry when the file isn't on disk yet.
 
-// We need to mock the engine singleton so we don't start a real WebTorrent client
-const fakeStream = { pipe: vi.fn() } // stand-in for ReadableStream
+vi.mock('fs', () => ({
+  existsSync: vi.fn(),
+  statSync: vi.fn(),
+  createReadStream: vi.fn(),
+}))
+
 const fakeFile = {
   name: 'chapter01.cbz',
+  path: 'chapter01.cbz',
   length: 2000,
   select: vi.fn(),
-  createReadStream: vi.fn(() => fakeStream),
 }
 
 const fakeTorrent = {
+  path: '/data/torrents/known',
   files: [fakeFile],
 }
+
+const DISK_PATH = '/data/torrents/known/chapter01.cbz'
 
 vi.mock('../torrent/engine.js', () => ({
   engine: {
     get: vi.fn((hash: string) => (hash === 'known-hash' ? fakeTorrent : undefined)),
   },
 }))
+
+/** Pretend the file is fully on disk; returns the pipe mock of its read stream. */
+function fileOnDisk(size = 2000) {
+  vi.mocked(existsSync).mockReturnValue(true)
+  vi.mocked(statSync).mockReturnValue({ size } as unknown as ReturnType<typeof statSync>)
+  const pipe = vi.fn()
+  vi.mocked(createReadStream).mockReturnValue(
+    { pipe } as unknown as ReturnType<typeof createReadStream>,
+  )
+  return pipe
+}
 
 function makeReq(overrides: Partial<{
   params: { infoHash: string; fileIndex: string }
@@ -87,12 +109,19 @@ function makeReq(overrides: Partial<{
 }
 
 function makeReply() {
-  const reply: Record<string, unknown> = {}
+  const raw = { writeHead: vi.fn(), end: vi.fn() }
+  const reply: Record<string, unknown> = { raw }
   reply.status = vi.fn(() => reply)
   reply.header = vi.fn(() => reply)
-  reply.headers = vi.fn(() => reply)
   reply.send = vi.fn(() => reply)
-  return reply as unknown as Parameters<typeof streamFile>[1]
+  reply.hijack = vi.fn(() => reply)
+  return reply as unknown as Parameters<typeof streamFile>[1] & {
+    raw: typeof raw
+    status: ReturnType<typeof vi.fn>
+    header: ReturnType<typeof vi.fn>
+    send: ReturnType<typeof vi.fn>
+    hijack: ReturnType<typeof vi.fn>
+  }
 }
 
 describe('streamFile', () => {
@@ -114,38 +143,57 @@ describe('streamFile', () => {
     expect(reply.send).toHaveBeenCalledWith({ error: 'file not found' })
   })
 
-  it('returns 200 with full file when no Range header', async () => {
+  it('streams 200 with the full file from disk when no Range header', async () => {
     const reply = makeReply()
+    const pipe = fileOnDisk(2000)
     await streamFile(makeReq(), reply)
     expect(fakeFile.select).toHaveBeenCalledWith(1)
-    expect(reply.status).toHaveBeenCalledWith(200)
-    expect(reply.headers).toHaveBeenCalledWith(
+    expect(reply.hijack).toHaveBeenCalled()
+    expect(reply.raw.writeHead).toHaveBeenCalledWith(
+      200,
       expect.objectContaining({
-        'Content-Length': '2000',
+        'Content-Length': 2000,
         'Accept-Ranges': 'bytes',
         'Content-Type': 'application/vnd.comicbook+zip',
       }),
     )
-    expect(fakeFile.createReadStream).toHaveBeenCalledWith()
+    expect(createReadStream).toHaveBeenCalledWith(DISK_PATH)
+    expect(pipe).toHaveBeenCalledWith(reply.raw)
   })
 
-  it('returns 206 with partial content on valid Range', async () => {
+  it('streams 206 with partial content on a valid Range', async () => {
     const reply = makeReply()
+    const pipe = fileOnDisk(2000)
     await streamFile(makeReq({ headers: { range: 'bytes=0-499' } }), reply)
-    expect(reply.status).toHaveBeenCalledWith(206)
-    expect(reply.headers).toHaveBeenCalledWith(
+    expect(reply.raw.writeHead).toHaveBeenCalledWith(
+      206,
       expect.objectContaining({
         'Content-Range': 'bytes 0-499/2000',
-        'Content-Length': '500',
+        'Content-Length': 500,
       }),
     )
-    expect(fakeFile.createReadStream).toHaveBeenCalledWith({ start: 0, end: 499 })
+    // createReadStream end is exclusive in the streamer, so end = 499 + 1.
+    expect(createReadStream).toHaveBeenCalledWith(DISK_PATH, { start: 0, end: 500 })
+    expect(pipe).toHaveBeenCalledWith(reply.raw)
   })
 
-  it('returns 416 on invalid Range header', async () => {
+  it('returns 416 on an invalid Range header', async () => {
     const reply = makeReply()
+    fileOnDisk(2000)
     await streamFile(makeReq({ headers: { range: 'bytes=9999-0' } }), reply)
-    expect(reply.status).toHaveBeenCalledWith(416)
-    expect(reply.header).toHaveBeenCalledWith('Content-Range', 'bytes */2000')
+    expect(reply.raw.writeHead).toHaveBeenCalledWith(416, { 'Content-Range': 'bytes */2000' })
+    expect(reply.raw.end).toHaveBeenCalled()
+  })
+
+  it('returns 503 with Retry-After when the file is not yet on disk', async () => {
+    const reply = makeReply()
+    vi.mocked(existsSync).mockReturnValue(false)
+    await streamFile(makeReq(), reply)
+    expect(fakeFile.select).toHaveBeenCalledWith(2) // boost priority
+    expect(reply.status).toHaveBeenCalledWith(503)
+    expect(reply.header).toHaveBeenCalledWith('Retry-After', '5')
+    expect(reply.send).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'file is still downloading' }),
+    )
   })
 })

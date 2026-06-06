@@ -114,17 +114,24 @@ describe('<MangaReader>', () => {
     seedPages('sess-mode', 1)
     stubProgress()
     renderReader('sess-mode')
-    await waitFor(() => expect(screen.getByText(/Paginated/)).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('1 / 1')).toBeInTheDocument())
+
+    // The mode chips live in the settings drawer; the active one is accented.
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /reader settings/i }))
+    const accent = 'text-[hsl(var(--accent))]'
+
+    expect(screen.getByRole('button', { name: 'Paginated' })).toHaveClass(accent)
 
     await act(async () => {
       fireEvent.keyDown(window, { key: 'M' })
     })
-    expect(screen.getByText(/Webtoon/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Webtoon' })).toHaveClass(accent)
 
     await act(async () => {
       fireEvent.keyDown(window, { key: 'M' })
     })
-    expect(screen.getByText(/Double page/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Double Page' })).toHaveClass(accent)
   })
 
   it('Escape calls router.back', async () => {
@@ -148,17 +155,15 @@ describe('<MangaReader>', () => {
     )
   })
 
-  it('jumping via the slider updates the counter', async () => {
+  it('advances the counter when clicking the Next page nav button', async () => {
     seedPages('sess-slide', 10)
     stubProgress()
     renderReader('sess-slide')
     await waitFor(() => expect(screen.getByText('1 / 10')).toBeInTheDocument())
 
-    const slider = screen.getByLabelText('Page') as HTMLInputElement
-    await act(async () => {
-      fireEvent.change(slider, { target: { value: '5' } })
-    })
-    expect(screen.getByText('6 / 10')).toBeInTheDocument()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /next page/i }))
+    expect(screen.getByText('2 / 10')).toBeInTheDocument()
   })
 
   it('clicking the Back button in the header calls router.back', async () => {
