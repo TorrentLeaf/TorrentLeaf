@@ -185,8 +185,17 @@ export function PdfReader({ fileId }: PdfReaderProps) {
         const loadingTask = pdfjs.getDocument({
           url: pageStreamURL(fileId),
           withCredentials: false,
-          rangeChunkSize: 65536,
+          // Each range request is a full proxy round-trip (web → caddy → Go →
+          // engine → disk). With 64KB chunks, rendering a page fans out into
+          // many tiny serial-ish requests (PDF.js discovers objects
+          // iteratively), which made large PDFs feel slow. 256KB chunks coalesce
+          // nearby objects so a page needs far fewer round-trips.
+          rangeChunkSize: 262144,
           disableStream: false,
+          // Keep lazy fetching: only pull the ranges a viewed page needs rather
+          // than background-fetching the whole file. This bounds browser memory
+          // on large PDFs (the slow case we're fixing) — flipping it to false
+          // would speed navigation but pull the entire file into memory.
           disableAutoFetch: true,
         })
         doc = await loadingTask.promise
