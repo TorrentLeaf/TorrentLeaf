@@ -113,6 +113,15 @@ class TorrentEngine {
   }
 
   remove(infoHash: string): Promise<void> {
+    // Idempotent: removing a torrent the client doesn't have is a no-op.
+    // webtorrent's client.remove() throws "No torrent with id <hash>" for
+    // unknown hashes — and in 2.x that throw can surface asynchronously,
+    // escaping the try/catch below and crashing the whole process. Guarding
+    // on existence first avoids that entirely (deleting an already-gone
+    // torrent is a common case after the DB and engine drift apart).
+    if (!this.get(infoHash)) {
+      return Promise.resolve()
+    }
     return new Promise((resolve, reject) => {
       try {
         this.client.remove(infoHash, (err) => (err ? reject(err) : resolve()))
