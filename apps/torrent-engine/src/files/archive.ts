@@ -1,9 +1,10 @@
 import path from 'node:path'
 import { existsSync, statSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { spawn } from 'node:child_process'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
-import { createExtractorFromFile } from 'node-unrar-js'
+import { createExtractorFromData } from 'node-unrar-js'
 import type { WTFile, WTTorrent } from '../torrent/engine.js'
 import { classifyFile, detectMime } from './detector.js'
 
@@ -167,7 +168,14 @@ async function getCbrExtractor(diskPath: string, size: number): Promise<RarExtra
     cbrExtractors.set(diskPath, cached) // bump to most-recently-used
     return cached.extractor
   }
-  const extractor = (await createExtractorFromFile({ filepath: diskPath })) as RarExtractor
+  // node-unrar-js 2.0.2's createExtractorFromFile lists headers fine but extracts
+  // zero bytes for RAR5 archives — every CBR page 503'd. createExtractorFromData
+  // (whole archive as an in-memory buffer) extracts correctly. The extractor is
+  // memoized and already holds its whole file in memory, so reading the buffer
+  // here matches the existing memory budget rather than adding to it.
+  const data = await readFile(diskPath)
+  const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
+  const extractor = (await createExtractorFromData({ data: buf })) as RarExtractor
   cbrExtractors.set(diskPath, { size, extractor })
   while (cbrExtractors.size > CBR_EXTRACTOR_MAX) {
     const oldest = cbrExtractors.keys().next().value
