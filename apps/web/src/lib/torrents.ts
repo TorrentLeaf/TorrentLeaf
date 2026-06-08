@@ -41,6 +41,11 @@ export interface TorrentProgress {
 
 import { api } from './api'
 
+export async function listTorrents(): Promise<TorrentSession[]> {
+  const { data } = await api.get<TorrentSession[]>('/torrents')
+  return data
+}
+
 export async function deleteTorrent(id: string): Promise<void> {
   await api.delete(`/torrents/${id}`)
 }

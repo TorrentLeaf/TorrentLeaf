@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchSettings, updateSettings, type UserSettings } from '@/lib/settings'
 import { useToast } from '@/hooks/use-toast'
+import { AppPageShell } from '@/components/dashboard/app-page-shell'
 
 const READING_MODES = [
   { value: 'paginated', label: 'Paginated' },
@@ -54,7 +55,7 @@ function SelectGroup({
 }) {
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-[hsl(var(--foreground))]">{label}</label>
+      <label className="text-sm font-medium text-foreground">{label}</label>
       <div className="flex flex-wrap gap-2">
         {options.map((opt) => (
           <button
@@ -63,8 +64,8 @@ function SelectGroup({
             onClick={() => onChange(opt.value)}
             className={`rounded-md border px-3 py-1.5 text-sm transition-all ${
               value === opt.value
-                ? 'border-[hsl(var(--accent))] bg-[hsl(var(--accent))]/10 text-[hsl(var(--accent))]'
-                : 'border-[hsl(var(--border))] text-[hsl(var(--muted))] hover:border-[hsl(var(--accent))]/40'
+                ? 'border-accent bg-accent/10 text-accent'
+                : 'border-border text-muted-foreground hover:border-accent/40'
             }`}
           >
             {opt.label}
@@ -112,18 +113,21 @@ export default function SettingsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-[hsl(var(--muted))]" />
-      </div>
+      <AppPageShell settingsActive>
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </AppPageShell>
     )
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <AppPageShell settingsActive>
+    <div className="mx-auto w-full max-w-3xl space-y-6 p-5 md:p-6 lg:p-8 xl:max-w-5xl 2xl:max-w-6xl">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Settings</h1>
-          <p className="mt-1 text-sm text-[hsl(var(--muted))]">
+          <p className="mt-1 text-sm text-muted-foreground">
             Customize your TorrentLeaf experience.
           </p>
         </div>
@@ -144,7 +148,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <FolderDown className="h-5 w-5 text-[hsl(var(--accent))]" />
+            <FolderDown className="h-5 w-5 text-accent" />
             General
           </CardTitle>
           <CardDescription>Download and library preferences.</CardDescription>
@@ -160,7 +164,7 @@ export default function SettingsPage() {
               onChange={(e) => setForm({ ...form, downloadPath: e.target.value })}
               placeholder="/data/torrents"
             />
-            <p className="text-xs text-[hsl(var(--muted))]">
+            <p className="text-xs text-muted-foreground">
               Absolute path on the server where torrents will be downloaded.
               Must be within a mounted Docker volume.
             </p>
@@ -169,7 +173,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium">Auto-add to library</p>
-              <p className="text-xs text-[hsl(var(--muted))]">
+              <p className="text-xs text-muted-foreground">
                 Automatically add new torrents to your library.
               </p>
             </div>
@@ -181,8 +185,8 @@ export default function SettingsPage() {
               onClick={() => setForm({ ...form, autoAddLibrary: !current.autoAddLibrary })}
               className={`relative h-6 w-11 rounded-full transition-colors ${
                 current.autoAddLibrary
-                  ? 'bg-[hsl(var(--accent))]'
-                  : 'bg-[hsl(var(--border))]'
+                  ? 'bg-accent'
+                  : 'bg-border'
               }`}
             >
               <span
@@ -199,7 +203,7 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <BookOpen className="h-5 w-5 text-[hsl(var(--accent))]" />
+            <BookOpen className="h-5 w-5 text-accent" />
             Reader defaults
           </CardTitle>
           <CardDescription>Default settings when opening a reader.</CardDescription>
@@ -238,8 +242,8 @@ export default function SettingsPage() {
                   aria-label={`Background: ${bg.label}`}
                   className={`h-8 w-8 rounded-full border-2 transition-all ${bg.class} ${
                     current.readerBackground === bg.value
-                      ? 'border-[hsl(var(--accent))] ring-2 ring-[hsl(var(--accent))]/30'
-                      : 'border-[hsl(var(--border))]'
+                      ? 'border-accent ring-2 ring-accent/30'
+                      : 'border-border'
                   }`}
                 />
               ))}
@@ -252,17 +256,18 @@ export default function SettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Monitor className="h-5 w-5 text-[hsl(var(--accent))]" />
+            <Monitor className="h-5 w-5 text-accent" />
             Display
           </CardTitle>
           <CardDescription>Theme and appearance settings.</CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-[hsl(var(--muted))]">
+          <p className="text-sm text-muted-foreground">
             Theme customization coming soon. TorrentLeaf currently uses dark mode.
           </p>
         </CardContent>
       </Card>
     </div>
+    </AppPageShell>
   )
 }

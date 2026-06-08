@@ -1,124 +1,106 @@
 'use client'
 
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Library as LibraryIcon } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { useRouter } from 'next/navigation'
 
+import { fetchLibrary } from '@/lib/library'
+import { listTorrents } from '@/lib/torrents'
 import {
-  fetchLibrary,
-  setFavorite,
-  type LibraryItemType,
-} from '@/lib/library'
-import { deleteTorrent } from '@/lib/torrents'
-import { TorrentCard } from '@/components/shared/TorrentCard'
-import { Button } from '@/components/ui/button'
-import { useToast } from '@/hooks/use-toast'
+  aggregateTransfer,
+  computeCounts,
+  fmtTime,
+  sessionToDashboard,
+  type DashboardFilter,
+} from '@/lib/dashboard'
+import { DashboardShell, type ChartMode } from '@/components/dashboard/dashboard-shell'
+import type { StatCell } from '@/components/dashboard/stats-panel'
 
-type FilterType = LibraryItemType | 'all'
-
-const FILTERS: { value: FilterType; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'manga', label: 'Manga' },
-  { value: 'book', label: 'Books' },
-  { value: 'document', label: 'Documents' },
-  { value: 'video', label: 'Video' },
-  { value: 'other', label: 'Other' },
-]
+const HISTORY_LEN = 60
+const POLL_MS = 2000
 
 export default function LibraryPage() {
-  const [typeFilter, setTypeFilter] = useState<FilterType>('all')
-  const [favoritesOnly, setFavoritesOnly] = useState(false)
-  const queryClient = useQueryClient()
-  const { toast } = useToast()
+  const router = useRouter()
 
-  const { data: cards = [], isLoading } = useQuery({
-    queryKey: ['library', typeFilter, favoritesOnly],
-    queryFn: () => fetchLibrary(typeFilter, favoritesOnly),
+  // Real data: live torrent transfers (polled) + library metadata for type tags.
+  const { data: sessions = [], dataUpdatedAt } = useQuery({
+    queryKey: ['torrents'],
+    queryFn: listTorrents,
+    refetchInterval: POLL_MS,
+  })
+  const { data: cards = [] } = useQuery({
+    queryKey: ['library', 'all'],
+    queryFn: () => fetchLibrary('all'),
   })
 
-  const toggleFav = useMutation({
-    mutationFn: ({ id, current }: { id: string; current: boolean }) =>
-      setFavorite(id, !current),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
-    },
-  })
+  const [filter, setFilter] = useState<DashboardFilter>('overview')
+  const [activeId, setActiveId] = useState<string>()
+  const [chartMode, setChartMode] = useState<ChartMode>('download')
+  const [notifications, setNotifications] = useState(false)
+  const [darkTheme, setDarkTheme] = useState(true)
 
-  const deleteM = useMutation({
-    mutationFn: (sessionId: string) => deleteTorrent(sessionId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['library'] })
-      toast({ title: 'Torrent deleted', description: 'The torrent has been removed from your library.' })
-    },
-    onError: () => {
-      toast({ title: 'Error', description: 'Failed to delete torrent.', variant: 'destructive' })
-    },
-  })
+  // Map a session id → library type for the type tag (real, from /library).
+  const typeBySession = useMemo(() => {
+    const m = new Map<string, (typeof cards)[number]['type']>()
+    for (const c of cards) m.set(c.sessionId, c.type)
+    return m
+  }, [cards])
+
+  const torrents = useMemo(
+    () => sessions.map((s) => sessionToDashboard(s, typeBySession.get(s.id))),
+    [sessions, typeBySession],
+  )
+  const counts = useMemo(() => computeCounts(torrents), [torrents])
+  const agg = useMemo(() => aggregateTransfer(sessions), [sessions])
+
+  // Real transfer-speed history, sampled once per successful poll.
+  const [downHistory, setDownHistory] = useState<number[]>([])
+  const [upHistory, setUpHistory] = useState<number[]>([])
+  const lastSampleAt = useRef(0)
+  useEffect(() => {
+    if (!dataUpdatedAt || dataUpdatedAt === lastSampleAt.current) return
+    lastSampleAt.current = dataUpdatedAt
+    const seedOrPush = (prev: number[], v: number) =>
+      prev.length === 0 ? Array<number>(HISTORY_LEN).fill(v) : [...prev.slice(1), v]
+    setDownHistory((p) => seedOrPush(p, agg.downRateMB))
+    setUpHistory((p) => seedOrPush(p, agg.upRateMB))
+  }, [dataUpdatedAt, agg.downRateMB, agg.upRateMB])
+
+  // Real stat cells — only metrics the API actually provides (no fabricated
+  // uploaded/ratio). "Library items" comes from real /library data.
+  const stats: StatCell[] = [
+    { label: 'Downloading', value: counts.dl },
+    { label: 'Seeding', value: counts.se },
+    { label: 'Peers', value: agg.peers },
+    { label: 'Downloaded', value: `${Math.round(agg.downloadedMB)} MB` },
+    { label: 'Library items', value: cards.length },
+    { label: 'Time left', value: fmtTime(agg.timeLeftSec) },
+  ]
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Library</h1>
-        <p className="mt-1 text-sm text-[hsl(var(--muted))]">
-          Your saved torrents, organized and ready to read.
-        </p>
-      </div>
-
-      {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map((f) => (
-          <Button
-            key={f.value}
-            variant={typeFilter === f.value ? 'default' : 'ghost'}
-            size="sm"
-            onClick={() => setTypeFilter(f.value)}
-          >
-            {f.label}
-          </Button>
-        ))}
-        <div className="mx-2 h-5 w-px bg-[hsl(var(--border))]" />
-        <Button
-          variant={favoritesOnly ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setFavoritesOnly((v) => !v)}
-        >
-          Favorites
-        </Button>
-      </div>
-
-      {/* Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div
-              key={i}
-              className="aspect-[2/3] animate-pulse rounded-xl bg-[hsl(var(--surface-2))]"
-            />
-          ))}
-        </div>
-      ) : cards.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 py-24 text-[hsl(var(--muted))]">
-          <LibraryIcon className="h-12 w-12" />
-          <p className="text-sm">
-            {favoritesOnly
-              ? 'No favorites yet. Star items to find them here.'
-              : 'Your library is empty. Add a torrent to get started.'}
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
-          {cards.map((card) => (
-            <TorrentCard
-              key={card.id}
-              card={card}
-              onToggleFavorite={(id, current) =>
-                toggleFav.mutate({ id, current })
-              }
-              onDelete={(sessionId) => deleteM.mutate(sessionId)}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+    <DashboardShell
+      torrents={torrents}
+      counts={counts}
+      filter={filter}
+      onFilterChange={setFilter}
+      activeId={activeId}
+      onActiveChange={(id) => {
+        setActiveId(id)
+        router.push(`/torrents/${id}` as never)
+      }}
+      history={chartMode === 'upload' ? upHistory : downHistory}
+      downRate={agg.downRateMB}
+      upRate={agg.upRateMB}
+      stats={stats}
+      chartMode={chartMode}
+      onChartModeChange={setChartMode}
+      notifications={notifications}
+      onNotificationsChange={setNotifications}
+      darkTheme={darkTheme}
+      onDarkThemeChange={setDarkTheme}
+      onAdd={() => router.push('/add')}
+      onSettings={() => router.push('/settings' as never)}
+      hideSeeds
+    />
   )
 }

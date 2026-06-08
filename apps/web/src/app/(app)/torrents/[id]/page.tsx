@@ -21,6 +21,7 @@ import { api } from '@/lib/api'
 import { deleteTorrent, type TorrentSession, type TorrentFile } from '@/lib/torrents'
 import { useTorrentProgress } from '@/hooks/use-torrent-progress'
 import { useToast } from '@/hooks/use-toast'
+import { AppPageShell } from '@/components/dashboard/app-page-shell'
 
 function readerLinkFor(sessionId: string, file: TorrentFile): string | null {
   // CBZ/CBR chapters are self-contained archives — open just that chapter.
@@ -87,13 +88,18 @@ export default function TorrentDetailPage() {
   })
 
   if (isLoading || !session) {
-    return <p className="text-sm text-muted-foreground">Loading torrent…</p>
+    return (
+      <AppPageShell>
+        <p className="p-6 text-sm text-muted-foreground">Loading torrent…</p>
+      </AppPageShell>
+    )
   }
 
   const pct = progress ? Math.round(progress.progress * 100) : 0
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <AppPageShell>
+    <div className="mx-auto w-full max-w-3xl space-y-6 p-5 md:p-6 lg:p-8 xl:max-w-5xl 2xl:max-w-6xl">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">
@@ -228,5 +234,6 @@ export default function TorrentDetailPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </AppPageShell>
   )
 }
