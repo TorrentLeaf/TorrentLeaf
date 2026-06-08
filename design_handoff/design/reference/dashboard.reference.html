@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TorrentLeaf — Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="dashboard.css" />
+<style>
+  /* ————————————————————————————————————————————————————————————
+     Dashboard shell — fills the viewport like a real app window.
+     Mobile-first. Breakpoints: md 768 · lg 1024
+     ———————————————————————————————————————————————————————————— */
+  body {
+    background:
+      radial-gradient(ellipse 90% 50% at 50% 0%, rgba(45, 212, 191, 0.05), transparent 70%),
+      #060809;
+    padding: 0;
+  }
+  .dash-root {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Top chrome */
+  .dash-chrome {
+    display: flex;
+    align-items: stretch;
+    flex-shrink: 0;
+  }
+  .dash-chrome .titlebar { flex: 1; min-width: 0; }
+  .dash-burger {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+    color: var(--text);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .dash-burger svg { width: 18px; height: 18px; }
+
+  /* Body */
+  .dash-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+  }
+  .dash-body > .sidebar {
+    width: 200px;
+    flex-shrink: 0;
+  }
+  @media (min-width: 768px) and (max-width: 1023px) {
+    .dash-body > .sidebar { width: 60px; }
+  }
+
+  .dash-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* On desktop, table is fixed at top and panels fill remaining height */
+  @media (min-width: 768px) {
+    .dash-main { overflow: hidden; }
+    .dash-main .table-wrap {
+      overflow-y: auto;
+      max-height: 50%;
+    }
+    .dash-main .bottom-panels { flex: 1; min-height: 260px; }
+  }
+
+  /* Tablet: stack chart + stats */
+  @media (min-width: 768px) and (max-width: 1023px) {
+    .bottom-panels { grid-template-columns: 1fr; }
+    .chart-panel { border-right: 0; border-bottom: 1px solid var(--border); }
+    .torrent-table .col-peers { display: none; }
+  }
+
+  /* Mobile */
+  @media (max-width: 767px) {
+    .dash-main { overflow-y: auto; padding-bottom: 64px; }
+    .bottom-panels {
+      grid-template-columns: 1fr;
+      border-top: 1px solid var(--border);
+    }
+    .chart-panel { border-right: 0; border-bottom: 1px solid var(--border); }
+    .stat-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* Mobile bottom nav */
+  .dash-bottomnav {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    height: 60px;
+    background: rgba(10, 13, 18, 0.92);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border-strong);
+    display: flex;
+    z-index: 50;
+  }
+  .bn-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    background: transparent;
+    border: 0;
+    color: var(--text-subtle);
+    font-family: inherit;
+    font-size: 10px;
+    cursor: pointer;
+    padding: 8px 0;
+  }
+  .bn-item.active { color: var(--brand); }
+  .bn-ico { position: relative; display: grid; place-items: center; }
+  .bn-ico svg { width: 18px; height: 18px; }
+  .bn-badge {
+    position: absolute;
+    top: -6px; left: 12px;
+    font-size: 8px;
+    background: rgba(45,212,191,0.22);
+    color: var(--brand);
+    border-radius: 999px;
+    padding: 0 4px;
+    min-width: 13px;
+    text-align: center;
+    line-height: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+  .bn-label { letter-spacing: 0.02em; }
+
+  /* Mobile drawer */
+  .dash-scrim {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    z-index: 90;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .dash-scrim.open { opacity: 1; pointer-events: auto; }
+  .dash-drawer {
+    position: fixed;
+    top: 0; left: 0;
+    height: 100dvh;
+    width: min(280px, 84vw);
+    background: linear-gradient(180deg, var(--card-a), var(--card-b));
+    border-right: 1px solid var(--border-strong);
+    z-index: 91;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .dash-drawer.open { transform: translateX(0); }
+  .dash-drawer-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .dash-drawer .sidebar { border-right: 0; }
+  .drawer-close {
+    width: 32px; height: 32px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    cursor: pointer;
+    display: grid; place-items: center;
+  }
+  .drawer-close svg { width: 16px; height: 16px; }
+
+  /* Back-to-landing pill */
+  .home-link {
+    position: fixed;
+    top: 8px; right: 10px;
+    z-index: 60;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-decoration: none;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+  }
+  .home-link:hover { color: var(--text); }
+  @media (max-width: 767px) { .home-link { display: none; } }
+</style>
+</head>
+<body>
+
+<a href="Landing Page.html" class="home-link">
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 19l-7-7 7-7"/></svg>
+  Landing
+</a>
+
+<div id="dash-mount"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script type="text/babel" src="components.jsx"></script>
+<script type="text/babel" src="dashboard.jsx"></script>
+
+</body>
+</html>
