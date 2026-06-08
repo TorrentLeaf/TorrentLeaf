@@ -2,13 +2,9 @@
 const nextConfig = {
   reactStrictMode: true,
   typedRoutes: true,
-  // Redirect the app root to /library at the framework level. Doing it here
-  // (instead of a Server Component calling redirect()) avoids a Next 16 +
-  // Turbopack dev quirk where the render-timing instrumentation throws
-  // "HomePage cannot have a negative time stamp".
-  async redirects() {
-    return [{ source: '/', destination: '/library', permanent: false }]
-  },
+  // NOTE: `/` now serves the public marketing landing (src/app/page.tsx). The
+  // old framework-level redirect of `/` → `/library` was removed so the landing
+  // is reachable without auth.
   async rewrites() {
     return [
       {
