@@ -110,7 +110,48 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 }
 
 func (s *torrentService) List(ctx context.Context, userID uuid.UUID) ([]domain.TorrentSession, error) {
-	return s.sessions.ListByUser(ctx, userID)
+	sessions, err := s.sessions.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	overlayLiveState(sessions, s.engine, ctx)
+	return sessions, nil
+}
+
+// overlayLiveState merges the engine's live progress/peers/speeds onto the
+// persisted sessions (the DB stores only zeros for these). Best-effort: if the
+// engine is unreachable, sessions are returned unchanged.
+func overlayLiveState(sessions []domain.TorrentSession, engine EngineClient, ctx context.Context) {
+	live, err := engine.List(ctx)
+	if err != nil || len(live) == 0 {
+		return
+	}
+	byHash := make(map[string]EngineTorrentStatus, len(live))
+	for _, t := range live {
+		byHash[strings.ToLower(t.InfoHash)] = t
+	}
+	for i := range sessions {
+		t, ok := byHash[strings.ToLower(sessions[i].InfoHash)]
+		if !ok {
+			continue
+		}
+		sessions[i].DownloadedBytes = t.Downloaded
+		sessions[i].PeersCount = t.Peers
+		sessions[i].DownloadSpeed = t.DownloadSpeed
+		sessions[i].UploadSpeed = t.UploadSpeed
+		if sessions[i].TotalSize == 0 && t.Length > 0 {
+			sessions[i].TotalSize = t.Length
+		}
+		// The DB keeps a stale "downloading"; derive a live status instead.
+		// Don't override an explicit paused/error state.
+		if sessions[i].Status != domain.StatusPaused && sessions[i].Status != domain.StatusError {
+			if t.Progress >= 1 {
+				sessions[i].Status = domain.StatusSeeding
+			} else {
+				sessions[i].Status = domain.StatusDownloading
+			}
+		}
+	}
 }
 
 func (s *torrentService) Get(ctx context.Context, userID, id uuid.UUID) (*domain.TorrentSession, error) {

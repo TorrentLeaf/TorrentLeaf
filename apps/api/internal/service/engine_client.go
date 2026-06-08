@@ -17,6 +17,10 @@ type EngineClient interface {
 	Remove(ctx context.Context, infoHash string) error
 	SetPriority(ctx context.Context, infoHash string, fileIndex, priority int) error
 	ListArchiveEntries(ctx context.Context, infoHash string, fileIndex int) ([]EngineArchiveEntry, error)
+	// List returns the engine's live state for every active torrent. Used to
+	// overlay real progress/peers/speeds onto the persisted sessions, which
+	// only store zeros for those fields.
+	List(ctx context.Context) ([]EngineTorrentStatus, error)
 }
 
 type EngineTorrentStatus struct {
@@ -80,6 +84,27 @@ func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPa
 		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
 	}
 	return status, nil
+}
+
+func (c *httpEngineClient) List(ctx context.Context) ([]EngineTorrentStatus, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/engine/torrents", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("engine list: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("engine list returned %d: %s", resp.StatusCode, string(raw))
+	}
+	var out []EngineTorrentStatus
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("decode engine list: %w", err)
+	}
+	return out, nil
 }
 
 func (c *httpEngineClient) Remove(ctx context.Context, infoHash string) error {
