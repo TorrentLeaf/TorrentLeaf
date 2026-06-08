@@ -78,9 +78,18 @@
 
 ### Torrent Engine (`apps/torrent-engine`)
 - **Runtime:** Node.js 20 LTS
-- **Engine:** webtorrent-hybrid (conecta WebRTC + BitTorrent tradicional)
+- **Engine:** `webtorrent` (BitTorrent puro — versão `-hybrid` foi descartada;
+  ver ADR 002)
 - **Framework:** Fastify v4
 - **Streaming:** HTTP Range Requests sobre os pedaços do torrent
+- **Arquivos comprimidos:**
+  - CBZ/ZIP via `yauzl` (random-access sobre WTFile, lê só o que precisa)
+  - CBR/RAR via `node-unrar-js` (requer arquivo completo em disco)
+  - 7z via `/usr/bin/7z` do `p7zip-full` (requer arquivo completo em disco)
+- **Vídeo:** `ffmpeg` + `ffprobe` para transmuxing on-the-fly. ffprobe detecta
+  codec/pix_fmt; H.264 8-bit é copiado (`-c:v copy`), HEVC/VP9/10-bit
+  re-codificam para H.264 baseline com `libx264 -preset ultrafast`. Áudio
+  sempre re-codificado para AAC stereo. Legendas extraídas como WebVTT.
 - **Filas:** Bull + Redis
 - **Logs:** Pino
 - **Tests:** Vitest + Supertest
@@ -326,8 +335,11 @@ type TorrentFile = {
   name: string
   path: string
   length: number
-  mimeType: 'image/jpeg' | 'image/png' | 'image/webp' | 'application/pdf' | 'application/epub+zip' | 'application/zip'
-  type: 'image' | 'pdf' | 'epub' | 'cbz' | 'cbr' | 'unknown'
+  mimeType: string  // image/*, video/*, application/pdf, application/epub+zip, etc.
+  // Persisted file types. Note: '.zip' is normalized to 'cbz' and '.7z'/'.rar'
+  // are normalized to 'cbr' at the API layer (the engine route picks the right
+  // extractor by actual extension). 'video' was added in migration 005.
+  type: 'image' | 'pdf' | 'epub' | 'cbz' | 'cbr' | 'video' | 'unknown'
   downloadedBytes: number
   priority: 0 | 1 | 2     // 0=skip, 1=normal, 2=high
 }
@@ -351,7 +363,7 @@ type LibraryItem = {
   torrentSessionId: string
   title: string
   coverUrl?: string
-  type: 'manga' | 'book' | 'document' | 'other'
+  type: 'manga' | 'book' | 'document' | 'video' | 'other'
   addedAt: Date
   lastReadAt?: Date
   progress?: number
@@ -365,9 +377,13 @@ GET    /api/v1/torrents              → Listar torrents do usuário
 GET    /api/v1/torrents/:id          → Detalhes + lista de arquivos
 DELETE /api/v1/torrents/:id          → Remover torrent
 POST   /api/v1/torrents/:id/priority → Priorizar arquivo/capítulo
+GET    /api/v1/torrents/:id/ws       → WebSocket de progresso
 
 GET    /api/v1/reader/:id/pages      → Lista de páginas de um arquivo
-GET    /api/v1/stream/:fileId/:page  → Stream de uma página/chunk
+GET    /api/v1/stream/:fileId        → Stream do arquivo inteiro (vídeo → transmux)
+GET    /api/v1/stream/:fileId/:page  → Stream de página individual (CBZ/CBR/7z entry)
+GET    /api/v1/probe/:fileId         → Streams de áudio + legendas (vídeos)
+GET    /api/v1/subtitles/:fileId/:streamIndex → WebVTT de uma faixa de legenda
 
 POST   /api/v1/auth/register
 POST   /api/v1/auth/login
@@ -381,20 +397,44 @@ DELETE /api/v1/library/:id
 GET    /api/v1/progress/:fileId      → Progresso de leitura
 PUT    /api/v1/progress/:fileId      → Atualizar progresso
 
+GET    /api/v1/settings              → Settings do usuário
+PUT    /api/v1/settings              → Atualizar settings
+
 GET    /api/v1/admin/torrents        → Admin: todos os torrents
+POST   /api/v1/admin/torrents/:id/pause   → Admin: pausar
+POST   /api/v1/admin/torrents/:id/resume  → Admin: retomar
+DELETE /api/v1/admin/torrents/:id    → Admin: deletar
 GET    /metrics                      → Prometheus metrics
 GET    /health                       → Health check
 ```
 
+**Auth nas rotas de stream/probe/subtitles:** usam `RequireAuthWS` (token
+via `?token=` na query) porque `<video>`, `<img>` e `<track>` não conseguem
+setar headers customizados.
+
 ### Rotas do Torrent Engine (interno)
 ```
-POST   /engine/torrents              → Adicionar torrent
+POST   /engine/torrents              → Adicionar torrent (aceita downloadPath)
 DELETE /engine/torrents/:infoHash    → Remover
+GET    /engine/torrents              → Listar todos os torrents ativos
 GET    /engine/torrents/:infoHash    → Status + files
 POST   /engine/torrents/:infoHash/priority → Priorizar arquivo
-GET    /engine/stream/:infoHash/:fileIndex → Stream HTTP com Range support
+
+GET    /engine/stream/:infoHash/:fileIndex          → Stream HTTP (Range), lê de disco
+GET    /engine/archive/:hash/:idx/entries           → Lista entries de CBZ/CBR/7z
+GET    /engine/archive/:hash/:idx/entry/:entryIdx   → Stream de uma entry (imagem)
+GET    /engine/transmux/:hash/:idx                  → MP4 fragmentado on-the-fly
+                                                       Query: ?audio=<absoluteIdx>
+GET    /engine/probe/:hash/:idx                     → Audio + subtitle streams (JSON)
+GET    /engine/subtitles/:hash/:idx/:streamIdx      → Stream WebVTT
+
 GET    /engine/health
 ```
+
+Streaming, archive, transmux, probe e subtitles **leem do disco** (não do
+swarm). Quando o arquivo ainda não está completamente baixado, o engine
+retorna HTTP 503 + `Retry-After: 5` para o frontend reusar até o disco
+encher.
 
 ---
 
@@ -473,6 +513,21 @@ CREATE INDEX idx_torrent_files_session ON torrent_files(session_id);
 CREATE INDEX idx_reading_progress_user ON reading_progress(user_id);
 CREATE INDEX idx_library_user ON library_items(user_id);
 ```
+
+### Migrations aplicadas (resumo das mudanças incrementais)
+
+| # | O que mudou |
+|---|------------|
+| 001 | Schema inicial + extensão `vector` (pgvector) |
+| 002 | `reading_progress.location TEXT` para CFI de EPUB |
+| 003 | Tabela `refresh_tokens` (revogação de refresh JWT) |
+| 004 | Tabela `user_settings` (download path, reader defaults, etc.) |
+| 005 | `'video'` adicionado aos CHECK de `torrent_files.file_type` e `library_items.content_type` |
+| 006 | `UNIQUE(info_hash)` em `torrent_sessions` virou `UNIQUE(user_id, info_hash)` — múltiplos usuários podem adicionar o mesmo torrent |
+
+**Convenção:** `'sevenz'` (engine) e `'zip'` (engine) são **normalizados na
+camada Go** para `'cbr'` e `'cbz'` respectivamente, mantendo o CHECK
+existente. O engine usa a extensão real do arquivo para escolher o extractor.
 
 ---
 
@@ -557,6 +612,10 @@ REDIS_URL=redis://redis:6379
 TORRENT_ENGINE_URL=http://torrent-engine:9000
 JWT_SECRET=<32+ chars random>
 JWT_REFRESH_SECRET=<32+ chars random>
+JWT_ACCESS_TTL=2h          # default
+JWT_REFRESH_TTL=168h       # default (7 dias)
+API_WEBHOOK_SECRET=<shared com o engine para webhook de metadata>
+CORS_ALLOWED_ORIGINS=https://app.example.com  # produção; dev usa localhost
 MINIO_ENDPOINT=minio:9000
 MINIO_ACCESS_KEY=torrentleaf
 MINIO_SECRET_KEY=secret
@@ -567,6 +626,7 @@ LOG_LEVEL=debug
 # apps/torrent-engine/.env
 REDIS_URL=redis://redis:6379
 API_URL=http://api:8080
+API_WEBHOOK_SECRET=<mesmo da api>
 TORRENT_DOWNLOAD_PATH=/data/torrents
 MAX_TORRENTS=50
 MAX_DISK_GB=20
@@ -645,3 +705,54 @@ Ler antes de qualquer tarefa multi-serviço — define orquestração entre agen
 Ler obrigatoriamente antes de tocar em qualquer componente de reader.
 Cobre: preload com IntersectionObserver, imagens de tamanho variável,
 modos paginated/webtoon/double-page, keyboard shortcuts, PDF.js range requests.
+
+### Vídeo: transmuxing e seleção de faixas
+Toda a leitura de vídeo passa pelo `/engine/transmux` (ver
+`apps/torrent-engine/src/api/routes/transmux.ts`). Pontos importantes:
+
+- `ffprobe` detecta `codec_name` + `pix_fmt`. Só `h264 + yuv420p/yuvj420p`
+  é copiado direto; o resto é re-codificado com `libx264 -preset ultrafast`.
+- Áudio sempre re-codificado para AAC 192k stereo (handles EAC3, DTS, FLAC, etc.).
+- Legendas texto (subrip/ass/ssa/mov_text/webvtt) são extraídas como WebVTT
+  via `/engine/subtitles/...`. Legendas em imagem (PGS/VobSub) **não são
+  suportadas** (precisariam OCR).
+- Resposta usa `reply.hijack()` + pipe para `reply.raw` — `reply.send(stream)`
+  do Fastify zerava o body por interação com o hook `onSend`.
+- O ffmpeg lê **direto do disco** (não via stdin pipe) para que `-map` consiga
+  endereçar streams pelo índice absoluto.
+
+### Arquivos comprimidos: CBZ, CBR, 7z, ZIP
+Ver `apps/torrent-engine/src/files/archive.ts`. CBZ/ZIP usam `yauzl` random-
+access (leem só o central directory do swarm); CBR e 7z exigem o arquivo
+inteiro em disco. A rota `/engine/archive` despacha pelo tipo:
+
+- `.cbz` / `.zip` → `listCbzEntries` / `openCbzEntry` (yauzl)
+- `.cbr` / `.rar` → `listCbrEntries` / `openCbrEntry` (node-unrar-js)
+- `.7z` → `listSevenZEntries` / `openSevenZEntry` (shell out para `/usr/bin/7z`)
+
+No Go, `normalizeFileType` mapeia `'zip'` → `FileTypeCBZ` e `'rar'`/`'7z'` →
+`FileTypeCBR` para evitar nova migration. O engine usa a extensão real do
+arquivo para escolher o extractor correto.
+
+### Settings de usuário
+`/api/v1/settings` (GET/PUT) — backend em `apps/api/internal/{domain,handler,
+repository,service}/settings*.go`. Consumidos por:
+
+- `TorrentService.Add` lê `downloadPath` e `autoAddLibrary` antes de adicionar
+  ao engine / shelvar.
+- `TorrentService.ReseedEngine` (startup) usa `downloadPath` por usuário.
+- `MangaReader`, `EpubReader`, `PdfReader` inicializam `readerBackground`,
+  `defaultReadingMode`, `defaultFitMode`, `readingDirection` a partir do hook
+  `useUserSettings()`.
+
+### Multi-usuário no mesmo torrent
+Após migration 006, dois usuários podem adicionar o mesmo info_hash sem
+conflito. `Add()` usa `GetByUserAndInfoHash` para idempotência por usuário e
+cria uma nova `TorrentSession` por usuário apontando para o mesmo torrent no
+engine.
+
+### Reseed automático no startup
+`TorrentService.ReseedEngine` (chamado em goroutine no `main.go`) re-adiciona
+todos os torrents `downloading`/`seeding` ao engine quando a API sobe. Isso
+recupera de restarts do engine (state em memória, perde tudo). Hidratar é
+best-effort — peers velhos podem nunca voltar.
