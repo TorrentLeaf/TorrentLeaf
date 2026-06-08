@@ -12,7 +12,11 @@ const config: Config = {
     extend: {
       colors: {
         background: 'hsl(var(--background))',
-        foreground: 'hsl(var(--foreground))',
+        foreground: {
+          DEFAULT: 'hsl(var(--foreground))',
+          muted: 'hsl(var(--foreground-muted))',
+          subtle: 'hsl(var(--foreground-subtle))',
+        },
         surface: {
           DEFAULT: 'hsl(var(--surface))',
           2: 'hsl(var(--surface-2))',
@@ -47,6 +51,7 @@ const config: Config = {
         warning: 'hsl(var(--warning))',
         success: 'hsl(var(--success))',
         info: 'hsl(var(--info))',
+        'chart-upload': 'hsl(var(--chart-upload))',
         card: {
           DEFAULT: 'hsl(var(--surface))',
           foreground: 'hsl(var(--foreground))',
