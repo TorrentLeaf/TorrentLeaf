@@ -3,6 +3,7 @@ export type AddErrorCode =
   | 'disk_budget'
   | 'max_torrents'
   | 'invalid_magnet'
+  | 'invalid_path'
 
 export class AddTorrentError extends Error {
   readonly code: AddErrorCode

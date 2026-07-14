@@ -1,10 +1,11 @@
 import axios from 'axios'
 import Redis from 'ioredis'
-import { statfsSync } from 'node:fs'
+import { mkdirSync, statfsSync } from 'node:fs'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import { analyzeFiles, isBlocked, isSafePath } from '../files/detector.js'
 import { AddTorrentError } from './errors.js'
+import { resolveDownloadPath } from './downloadPath.js'
 import { engine, type WTTorrent } from './engine.js'
 import type { TorrentStatus } from './types.js'
 
@@ -56,9 +57,12 @@ export class TorrentManager {
       throw new AddTorrentError('max_torrents', `max torrents reached (${config.maxTorrents})`)
     }
 
-    this.assertDiskAvailable()
+    const resolvedPath = resolveDownloadPath(config.downloadPath, downloadPath)
+    // mkdir -p so statfs + webtorrent write to an existing dir
+    mkdirSync(resolvedPath, { recursive: true })
+    this.assertDiskAvailable(resolvedPath)
 
-    const torrent = engine.add(magnetURI, downloadPath)
+    const torrent = engine.add(magnetURI, resolvedPath)
 
     if (torrent.ready && torrent.infoHash) {
       logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent already ready')
@@ -94,11 +98,11 @@ export class TorrentManager {
    * Uses the engine's in-memory byte accounting + statfs, so there's no disk
    * walk. Throws (→ 400 at the route) with a clear message.
    */
-  private assertDiskAvailable(): void {
+  private assertDiskAvailable(dir: string): void {
     const GB = 1024 ** 3
 
     try {
-      const st = statfsSync(config.downloadPath)
+      const st = statfsSync(dir)
       const freeBytes = st.bavail * st.bsize
       if (freeBytes < config.minFreeDiskGB * GB) {
         throw new AddTorrentError(
