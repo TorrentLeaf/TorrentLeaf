@@ -43,6 +43,15 @@ type EngineArchiveEntry struct {
 	MimeType string `json:"mimeType"`
 }
 
+// EngineAddError is returned by Add when the engine rejects the request with a
+// machine-readable code (e.g. disk full). Callers map Code to a domain error.
+type EngineAddError struct {
+	Code    string
+	Message string
+}
+
+func (e *EngineAddError) Error() string { return e.Message }
+
 type httpEngineClient struct {
 	baseURL string
 	http    *http.Client
@@ -76,6 +85,13 @@ func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPa
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code != "" {
+			return EngineTorrentStatus{}, &EngineAddError{Code: body.Code, Message: body.Error}
+		}
 		return EngineTorrentStatus{}, fmt.Errorf("engine add returned %d: %s", resp.StatusCode, string(raw))
 	}
 

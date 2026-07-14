@@ -38,6 +38,26 @@ func NewTorrentService(
 // the ceiling blocks trivial request-bloat DoS without rejecting legit links.
 const maxMagnetURILength = 2048
 
+// mapEngineAddError translates an engine add failure into a domain error.
+// A machine-readable EngineAddError (disk full, invalid magnet, etc.) is
+// surfaced with the real reason; any other error is a transport/unknown
+// failure and is hidden behind a generic "unavailable" so internal details
+// (engine URLs, connection strings) never leak into the API response.
+func mapEngineAddError(err error) error {
+	var ae *EngineAddError
+	if errors.As(err, &ae) {
+		switch ae.Code {
+		case "insufficient_disk", "disk_budget":
+			return domain.NewError(domain.ErrInsufficientStorage, ae.Message, err)
+		case "max_torrents":
+			return domain.NewError(domain.ErrUnavailable, ae.Message, err)
+		case "invalid_magnet", "invalid_path", "invalid_upload":
+			return domain.NewError(domain.ErrInvalidInput, ae.Message, err)
+		}
+	}
+	return domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
+}
+
 func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error) {
 	magnetURI = strings.TrimSpace(magnetURI)
 	if len(magnetURI) > maxMagnetURILength {
@@ -81,7 +101,7 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 
 	if _, err := s.engine.Add(ctx, magnetURI, downloadPath); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
-		return nil, domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
+		return nil, mapEngineAddError(err)
 	}
 
 	// Auto-shelf: create a library row with the infoHash as placeholder title.

@@ -14,6 +14,9 @@ const (
 	// ErrUnavailable: resource exists but is temporarily not usable; the
 	// client should back off and retry (maps to HTTP 503).
 	ErrUnavailable ErrCode = "unavailable"
+	// ErrInsufficientStorage: the request cannot be satisfied because the
+	// server is out of disk space (maps to HTTP 507).
+	ErrInsufficientStorage ErrCode = "insufficient_storage"
 )
 
 type Error struct {
