@@ -23,6 +23,13 @@ let refreshPromise: Promise<string | null> | null = null
 api.interceptors.response.use(
   (resp) => resp,
   async (error: AxiosError) => {
+    // Surface the server's human-readable error (`{ "error": "..." }`) as the
+    // thrown Error.message so the UI shows the real reason (e.g. "not enough
+    // free disk space"). The AxiosError shape (.response/.status) is preserved
+    // for callers (readers) that still inspect the status code.
+    const serverMsg = (error.response?.data as { error?: string } | undefined)?.error
+    if (serverMsg) error.message = serverMsg
+
     const original = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined
 
     if (error.response?.status !== 401 || !original || original._retry) {

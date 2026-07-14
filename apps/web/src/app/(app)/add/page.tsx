@@ -12,9 +12,18 @@ export default function AddTorrentPage() {
   const { toast } = useToast()
 
   async function handleAdd(magnetURI: string) {
-    const { data } = await api.post<{ id: string; name: string }>('/torrents', { magnetURI })
-    toast({ title: 'Torrent added', description: data.name || 'Fetching metadata…' })
-    router.push(`/torrents/${data.id}` as never)
+    try {
+      const { data } = await api.post<{ id: string; name: string }>('/torrents', { magnetURI })
+      toast({ title: 'Torrent added', description: data.name || 'Fetching metadata…' })
+      router.push(`/torrents/${data.id}` as never)
+    } catch (err) {
+      toast({
+        title: 'Could not add torrent',
+        description: err instanceof Error ? err.message : 'Unexpected error',
+        variant: 'destructive',
+      })
+      throw err // let MagnetInput surface the inline message too
+    }
   }
 
   return (
