@@ -15,7 +15,6 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
-  torrent_data:
   caddy_data:
   caddy_config:
 
@@ -99,7 +98,7 @@ services:
       LOG_LEVEL: debug
       DEBUG: "webtorrent:*,bittorrent-tracker,bittorrent-dht"
     volumes:
-      - torrent_data:/data/torrents
+      - ${TORRENTLEAF_DATA_DIR:-./data/torrents}:/data/torrents
       - ./apps/torrent-engine/src:/app/src
       - ./apps/torrent-engine/tsconfig.json:/app/tsconfig.json
     ports:

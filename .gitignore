@@ -87,3 +87,6 @@ minio-data/
 HANDOFF.md
 TODO.md
 COMMANDS.md
+
+# Engine bind-mount data dir (ADR 006)
+/data/
