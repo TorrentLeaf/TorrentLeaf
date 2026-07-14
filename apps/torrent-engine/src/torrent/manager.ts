@@ -4,6 +4,7 @@ import { statfsSync } from 'node:fs'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import { analyzeFiles, isBlocked, isSafePath } from '../files/detector.js'
+import { AddTorrentError } from './errors.js'
 import { engine, type WTTorrent } from './engine.js'
 import type { TorrentStatus } from './types.js'
 
@@ -45,14 +46,14 @@ export class TorrentManager {
    */
   add(magnetURI: string, downloadPath?: string): TorrentStatus {
     if (magnetURI.length > MAGNET_MAX_LEN) {
-      throw new Error('magnet uri too long')
+      throw new AddTorrentError('invalid_magnet', 'magnet uri too long')
     }
     if (!MAGNET_RE.test(magnetURI)) {
-      throw new Error('invalid magnet uri')
+      throw new AddTorrentError('invalid_magnet', 'invalid magnet uri')
     }
 
     if (engine.list().length >= config.maxTorrents) {
-      throw new Error(`max torrents reached (${config.maxTorrents})`)
+      throw new AddTorrentError('max_torrents', `max torrents reached (${config.maxTorrents})`)
     }
 
     this.assertDiskAvailable()
@@ -100,7 +101,8 @@ export class TorrentManager {
       const st = statfsSync(config.downloadPath)
       const freeBytes = st.bavail * st.bsize
       if (freeBytes < config.minFreeDiskGB * GB) {
-        throw new Error(
+        throw new AddTorrentError(
+          'insufficient_disk',
           `not enough free disk space (${(freeBytes / GB).toFixed(1)} GB free, ` +
             `minimum ${config.minFreeDiskGB} GB)`,
         )
@@ -108,12 +110,13 @@ export class TorrentManager {
     } catch (err) {
       // Re-throw our own guard; swallow statfs failures (e.g. path not yet
       // created) so a measurement error never blocks adds on its own.
-      if (err instanceof Error && err.message.startsWith('not enough free disk')) throw err
+      if (err instanceof AddTorrentError && err.code === 'insufficient_disk') throw err
     }
 
     const usedBytes = engine.list().reduce((sum, t) => sum + (t.downloaded ?? 0), 0)
     if (usedBytes >= config.maxDiskGB * GB) {
-      throw new Error(
+      throw new AddTorrentError(
+        'disk_budget',
         `disk budget reached (${(usedBytes / GB).toFixed(1)} GB used, ` +
           `limit ${config.maxDiskGB} GB)`,
       )

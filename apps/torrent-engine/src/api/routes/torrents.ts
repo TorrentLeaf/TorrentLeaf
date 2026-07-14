@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { torrentManager } from '../../torrent/manager.js'
+import { AddTorrentError } from '../../torrent/errors.js'
 import { clearTranscodeCache } from '../../files/transcodeCache.js'
 import { clearArchiveCache } from '../../files/archiveCache.js'
 
@@ -28,7 +29,11 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
       const status = torrentManager.add(parsed.data.magnetURI, parsed.data.downloadPath)
       reply.status(201).send(status)
     } catch (err) {
-      reply.status(400).send({ error: (err as Error).message })
+      if (err instanceof AddTorrentError) {
+        reply.status(400).send({ error: err.message, code: err.code })
+        return
+      }
+      reply.status(400).send({ error: (err as Error).message, code: 'add_failed' })
     }
   })
 
