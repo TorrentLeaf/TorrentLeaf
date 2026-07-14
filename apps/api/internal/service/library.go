@@ -24,6 +24,27 @@ type LibraryCard struct {
 	CurrentPage   int
 	TotalPages    int
 	LastReadAt    *time.Time
+	// Format is the content group derived from the session's dominant file
+	// type. One of: comics | books | pdfs | video | other. Drives the sidebar
+	// format filters; it is derived, not stored.
+	Format string
+}
+
+// formatFromFileType maps a torrent_files.file_type value to the coarse content
+// format used by the library sidebar filters.
+func formatFromFileType(ft string) string {
+	switch ft {
+	case "image", "cbz", "cbr":
+		return "comics"
+	case "epub":
+		return "books"
+	case "pdf":
+		return "pdfs"
+	case "video":
+		return "video"
+	default:
+		return "other"
+	}
 }
 
 // ListFilter mirrors repository.LibraryListFilter but lives at the service
@@ -78,6 +99,7 @@ func (s *libraryService) List(ctx context.Context, userID uuid.UUID, filter List
 			AddedAt:    r.Item.AddedAt,
 			IsFavorite: r.IsFavorite,
 			LastReadAt: r.LastReadAt,
+			Format:     formatFromFileType(r.DominantFileType),
 		}
 		if r.LastReadPage != nil {
 			card.CurrentPage = *r.LastReadPage

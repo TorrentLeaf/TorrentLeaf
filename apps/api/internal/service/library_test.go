@@ -302,3 +302,18 @@ func TestLibraryInvalidType(t *testing.T) {
 		t.Fatalf("expected ErrInvalidInput, got %v", err)
 	}
 }
+
+func TestFormatFromFileType(t *testing.T) {
+	cases := map[string]string{
+		"image": "comics", "cbz": "comics", "cbr": "comics",
+		"epub":    "books",
+		"pdf":     "pdfs",
+		"video":   "video",
+		"unknown": "other", "": "other", "weird": "other",
+	}
+	for in, want := range cases {
+		if got := formatFromFileType(in); got != want {
+			t.Fatalf("formatFromFileType(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -79,7 +79,15 @@ func (r *libraryRepo) ListByUser(ctx context.Context, userID uuid.UUID, filter L
 		       (fav.session_id IS NOT NULL) AS is_favorite,
 		       last_read.current_page,
 		       last_read.total_pages,
-		       last_read.last_read_at
+		       last_read.last_read_at,
+		       COALESCE((
+		           SELECT tf.file_type
+		           FROM torrent_files tf
+		           WHERE tf.session_id = li.session_id AND tf.file_type IS NOT NULL
+		           GROUP BY tf.file_type
+		           ORDER BY COUNT(*) DESC, tf.file_type ASC
+		           LIMIT 1
+		       ), 'unknown') AS dominant_file_type
 		FROM library_items li
 		LEFT JOIN favorites fav
 		       ON fav.user_id = li.user_id AND fav.session_id = li.session_id
@@ -202,5 +210,6 @@ func scanLibraryItemWithMeta(r rowScanner, m *LibraryItemWithMeta) error {
 		&m.Item.CoverURL, &m.Item.Type, &m.Item.AddedAt, &m.Item.LastReadAt,
 		&m.IsFavorite,
 		&m.LastReadPage, &m.LastReadTotal, &m.LastReadAt,
+		&m.DominantFileType,
 	)
 }
