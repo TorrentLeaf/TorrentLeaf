@@ -15,4 +15,9 @@ describe('MagnetInput', () => {
     await userEvent.click(screen.getByRole('button', { name: /add/i }))
     expect(await screen.findByText(/not enough free disk space/i)).toBeInTheDocument()
   })
+
+  it('prefills from defaultValue', () => {
+    render(<MagnetInput onSubmit={vi.fn()} defaultValue={VALID} />)
+    expect(screen.getByDisplayValue(VALID)).toBeInTheDocument()
+  })
 })
