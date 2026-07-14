@@ -89,7 +89,7 @@ export default function SettingsPage() {
 
   // Merge form overrides on top of server state.
   const current: UserSettings = {
-    downloadPath: form.downloadPath ?? settings?.downloadPath ?? '/data/torrents',
+    downloadPath: form.downloadPath ?? settings?.downloadPath ?? '',
     defaultReadingMode: form.defaultReadingMode ?? settings?.defaultReadingMode ?? 'paginated',
     defaultFitMode: form.defaultFitMode ?? settings?.defaultFitMode ?? 'fit-width',
     readingDirection: form.readingDirection ?? settings?.readingDirection ?? 'ltr',
@@ -162,11 +162,11 @@ export default function SettingsPage() {
               id="download-path"
               value={current.downloadPath}
               onChange={(e) => setForm({ ...form, downloadPath: e.target.value })}
-              placeholder="/data/torrents"
+              placeholder="manga/one-piece"
             />
             <p className="text-xs text-muted-foreground">
-              Absolute path on the server where torrents will be downloaded.
-              Must be within a mounted Docker volume.
+              Subfolder under the server&apos;s data directory (e.g. manga/one-piece).
+              No absolute paths. Leave empty to use the default.
             </p>
           </div>
 
