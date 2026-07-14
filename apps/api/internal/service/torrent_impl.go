@@ -382,7 +382,8 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 		return fmt.Errorf("reseed: list sessions: %w", err)
 	}
 
-	var added, skipped, failed int
+	var added, skipped int
+	var failures []string
 	for _, sess := range sessions {
 		// Only re-add torrents that were actively downloading/seeding.
 		if sess.Status == domain.StatusPaused || sess.MagnetURI == "" {
@@ -397,15 +398,22 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 		}
 
 		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath); err != nil {
-			failed++
+			// Record which torrent failed and why (engine code when available)
+			// so the aggregate log is legible instead of an opaque "failed N/M".
+			reason := "engine unavailable"
+			var ae *EngineAddError
+			if errors.As(err, &ae) {
+				reason = ae.Code
+			}
+			failures = append(failures, fmt.Sprintf("%s(%s)", sess.InfoHash, reason))
 			continue
 		}
 		added++
 	}
 
-	if failed > 0 {
-		return fmt.Errorf("reseed: added %d, skipped %d, failed %d/%d",
-			added, skipped, failed, len(sessions))
+	if len(failures) > 0 {
+		return fmt.Errorf("reseed: added %d, skipped %d, failed %d/%d: %s",
+			added, skipped, len(failures), len(sessions), strings.Join(failures, ", "))
 	}
 	return nil
 }

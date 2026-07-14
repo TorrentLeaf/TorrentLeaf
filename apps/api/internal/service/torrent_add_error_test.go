@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -44,6 +45,29 @@ func TestAdd_InvalidMagnetFromEngine_MapsToInvalidInput(t *testing.T) {
 	var de *domain.Error
 	if !errors.As(err, &de) || de.Code != domain.ErrInvalidInput {
 		t.Fatalf("want ErrInvalidInput, got %v", err)
+	}
+}
+
+func TestReseedEngine_ReportsPerTorrentReason(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	ctx := context.Background()
+	if _, err := sr.Create(ctx, domain.TorrentSession{
+		UserID:    uuid.New(),
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		MagnetURI: validMagnet,
+		Status:    domain.StatusSeeding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.addErr = &EngineAddError{Code: "insufficient_disk", Message: "disk full"}
+
+	err := svc.ReseedEngine(ctx)
+	if err == nil {
+		t.Fatal("want an aggregate error when a reseed fails")
+	}
+	if !strings.Contains(err.Error(), "0123456789abcdef0123456789abcdef01234567") ||
+		!strings.Contains(err.Error(), "insufficient_disk") {
+		t.Fatalf("reseed error should name the torrent + reason, got %q", err.Error())
 	}
 }
 
