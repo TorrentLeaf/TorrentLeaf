@@ -7,12 +7,11 @@ import {
   ArrowUp,
   ListChecks,
   Settings,
-  Moon,
   Plus,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
-import { Toggle } from '@/components/ui/toggle'
+import { ThemeToggle } from '@/components/dashboard/theme-toggle'
 import type { DashboardCounts, DashboardFilter } from '@/lib/dashboard'
 import { LIBRARY_FORMATS, type LibraryFormat } from '@/lib/library-format'
 import { cn } from '@/lib/utils'
@@ -29,8 +28,6 @@ export type SidebarProps = {
   /** Highlighted library format (on /library?format=…); omit for none. */
   activeFormat?: LibraryFormat
   onLibraryFormat: (format: LibraryFormat) => void
-  darkTheme: boolean
-  onDarkThemeChange: (v: boolean) => void
   /** Icon-rail mode (tablet). */
   collapsed?: boolean
   /** Primary "Add torrent" action — rendered in the Overview section. */
@@ -61,8 +58,6 @@ export function Sidebar({
   libraryCounts,
   activeFormat,
   onLibraryFormat,
-  darkTheme,
-  onDarkThemeChange,
   collapsed = false,
   onAdd,
   onSettings,
@@ -158,18 +153,7 @@ export function Sidebar({
         <Settings className="h-4 w-4 flex-shrink-0 opacity-80" />
         <span className={cn('min-w-0 flex-1 truncate', collapsed && 'hidden')}>Settings</span>
       </button>
-      {/* Rows are non-interactive containers; the Toggle is the real control
-          (a <button> can't nest inside a <button>). */}
-      <div className={cn(itemBase, 'cursor-default', collapsed && 'justify-center px-0 py-[9px]')}>
-        <Moon className="h-4 w-4 flex-shrink-0 opacity-80" />
-        <span className={cn('min-w-0 flex-1 truncate', collapsed && 'hidden')}>Dark theme</span>
-        <Toggle
-          checked={darkTheme}
-          onCheckedChange={onDarkThemeChange}
-          aria-label="Dark theme"
-          className={cn(collapsed && 'hidden')}
-        />
-      </div>
+      <ThemeToggle collapsed={collapsed} />
     </aside>
   )
 }

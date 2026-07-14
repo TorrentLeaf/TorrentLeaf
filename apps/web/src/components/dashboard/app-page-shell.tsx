@@ -1,6 +1,6 @@
 'use client'
 
-import { type ReactNode, useState } from 'react'
+import { type ReactNode } from 'react'
 import { useRouter } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 
@@ -22,7 +22,6 @@ export function AppPageShell({
   children: ReactNode
 }) {
   const router = useRouter()
-  const [darkTheme, setDarkTheme] = useState(true)
 
   const { data: sessions = [] } = useQuery({ queryKey: ['torrents'], queryFn: listTorrents })
   const counts = computeCounts(sessions.map((s) => sessionToDashboard(s)))
@@ -39,8 +38,6 @@ export function AppPageShell({
       onLibraryFormat={(f: LibraryFormat) => router.push(`/library?format=${f}` as never)}
       onAdd={() => router.push('/add')}
       onSettings={() => router.push('/settings' as never)}
-      darkTheme={darkTheme}
-      onDarkThemeChange={setDarkTheme}
     >
       {children}
     </AppShell>

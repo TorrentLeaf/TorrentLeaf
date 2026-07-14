@@ -30,8 +30,6 @@ export type AppShellProps = {
   onLibraryFormat: (format: LibraryFormat) => void
   onAdd?: () => void
   onSettings?: () => void
-  darkTheme: boolean
-  onDarkThemeChange: (v: boolean) => void
   children: ReactNode
 }
 
@@ -52,8 +50,6 @@ export function AppShell({
   onLibraryFormat,
   onAdd,
   onSettings,
-  darkTheme,
-  onDarkThemeChange,
   children,
 }: AppShellProps) {
   const { isMobile, isTablet } = useViewport()
@@ -66,8 +62,6 @@ export function AppShell({
     libraryCounts,
     activeFormat,
     onLibraryFormat,
-    darkTheme,
-    onDarkThemeChange,
     onAdd,
     onSettings,
   }
