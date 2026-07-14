@@ -22,7 +22,6 @@ export function AppPageShell({
   children: ReactNode
 }) {
   const router = useRouter()
-  const [notifications, setNotifications] = useState(false)
   const [darkTheme, setDarkTheme] = useState(true)
 
   const { data: sessions = [] } = useQuery({ queryKey: ['torrents'], queryFn: listTorrents })
@@ -40,8 +39,6 @@ export function AppPageShell({
       onLibraryFormat={(f: LibraryFormat) => router.push(`/library?format=${f}` as never)}
       onAdd={() => router.push('/add')}
       onSettings={() => router.push('/settings' as never)}
-      notifications={notifications}
-      onNotificationsChange={setNotifications}
       darkTheme={darkTheme}
       onDarkThemeChange={setDarkTheme}
     >

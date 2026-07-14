@@ -40,7 +40,6 @@ function LibraryContent() {
   const [activeFormat, setActiveFormat] = useState<LibraryFormat | undefined>(formatParam ?? undefined)
   const [activeId, setActiveId] = useState<string>()
   const [chartMode, setChartMode] = useState<ChartMode>('download')
-  const [notifications, setNotifications] = useState(false)
   const [darkTheme, setDarkTheme] = useState(true)
 
   // Map a session id → library type for the type tag (real, from /library).
@@ -118,8 +117,6 @@ function LibraryContent() {
       stats={stats}
       chartMode={chartMode}
       onChartModeChange={setChartMode}
-      notifications={notifications}
-      onNotificationsChange={setNotifications}
       darkTheme={darkTheme}
       onDarkThemeChange={setDarkTheme}
       onAdd={() => router.push('/add')}

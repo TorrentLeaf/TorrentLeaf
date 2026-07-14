@@ -7,7 +7,6 @@ import {
   ArrowUp,
   ListChecks,
   Settings,
-  Bell,
   Moon,
   Plus,
 } from 'lucide-react'
@@ -30,8 +29,6 @@ export type SidebarProps = {
   /** Highlighted library format (on /library?format=…); omit for none. */
   activeFormat?: LibraryFormat
   onLibraryFormat: (format: LibraryFormat) => void
-  notifications: boolean
-  onNotificationsChange: (v: boolean) => void
   darkTheme: boolean
   onDarkThemeChange: (v: boolean) => void
   /** Icon-rail mode (tablet). */
@@ -64,8 +61,6 @@ export function Sidebar({
   libraryCounts,
   activeFormat,
   onLibraryFormat,
-  notifications,
-  onNotificationsChange,
   darkTheme,
   onDarkThemeChange,
   collapsed = false,
@@ -165,16 +160,6 @@ export function Sidebar({
       </button>
       {/* Rows are non-interactive containers; the Toggle is the real control
           (a <button> can't nest inside a <button>). */}
-      <div className={cn(itemBase, 'cursor-default', collapsed && 'justify-center px-0 py-[9px]')}>
-        <Bell className="h-4 w-4 flex-shrink-0 opacity-80" />
-        <span className={cn('min-w-0 flex-1 truncate', collapsed && 'hidden')}>Notifications</span>
-        <Toggle
-          checked={notifications}
-          onCheckedChange={onNotificationsChange}
-          aria-label="Notifications"
-          className={cn(collapsed && 'hidden')}
-        />
-      </div>
       <div className={cn(itemBase, 'cursor-default', collapsed && 'justify-center px-0 py-[9px]')}>
         <Moon className="h-4 w-4 flex-shrink-0 opacity-80" />
         <span className={cn('min-w-0 flex-1 truncate', collapsed && 'hidden')}>Dark theme</span>

@@ -28,8 +28,6 @@ export type DashboardShellProps = {
   stats?: StatCell[]
   chartMode: ChartMode
   onChartModeChange: (m: ChartMode) => void
-  notifications: boolean
-  onNotificationsChange: (v: boolean) => void
   darkTheme: boolean
   onDarkThemeChange: (v: boolean) => void
   onAdd?: () => void
@@ -45,7 +43,7 @@ export function DashboardShell(props: DashboardShellProps) {
     torrents, counts, filter, onFilterChange, libraryCounts, activeFormat, onLibraryFormat,
     activeId, onActiveChange, history,
     downRate, upRate, stats, chartMode, onChartModeChange,
-    notifications, onNotificationsChange, darkTheme, onDarkThemeChange,
+    darkTheme, onDarkThemeChange,
     onAdd, onSettings, hideSeeds, animateTip = true,
   } = props
   const { isMobile, isTablet } = useViewport()
@@ -60,8 +58,6 @@ export function DashboardShell(props: DashboardShellProps) {
       onLibraryFormat={onLibraryFormat}
       onAdd={onAdd}
       onSettings={onSettings}
-      notifications={notifications}
-      onNotificationsChange={onNotificationsChange}
       darkTheme={darkTheme}
       onDarkThemeChange={onDarkThemeChange}
     >

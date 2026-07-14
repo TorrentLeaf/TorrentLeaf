@@ -30,8 +30,6 @@ export type AppShellProps = {
   onLibraryFormat: (format: LibraryFormat) => void
   onAdd?: () => void
   onSettings?: () => void
-  notifications: boolean
-  onNotificationsChange: (v: boolean) => void
   darkTheme: boolean
   onDarkThemeChange: (v: boolean) => void
   children: ReactNode
@@ -54,8 +52,6 @@ export function AppShell({
   onLibraryFormat,
   onAdd,
   onSettings,
-  notifications,
-  onNotificationsChange,
   darkTheme,
   onDarkThemeChange,
   children,
@@ -70,8 +66,6 @@ export function AppShell({
     libraryCounts,
     activeFormat,
     onLibraryFormat,
-    notifications,
-    onNotificationsChange,
     darkTheme,
     onDarkThemeChange,
     onAdd,
