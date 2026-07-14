@@ -10,6 +10,8 @@ import (
 
 type TorrentService interface {
 	Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error)
+	// AddFromFile adds a torrent from raw .torrent file bytes.
+	AddFromFile(ctx context.Context, userID uuid.UUID, torrentFile []byte) (*domain.TorrentSession, error)
 	List(ctx context.Context, userID uuid.UUID) ([]domain.TorrentSession, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (*domain.TorrentSession, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error

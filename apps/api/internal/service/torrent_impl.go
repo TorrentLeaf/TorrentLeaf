@@ -58,6 +58,17 @@ func mapEngineAddError(err error) error {
 	return domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
 }
 
+// safeDownloadPath returns the user's stored download path only if it is a
+// valid relative subfolder; legacy/invalid values (e.g. the old absolute
+// "/data/torrents" default) fall back to "" so the engine uses its default
+// instead of rejecting the add with invalid_path.
+func safeDownloadPath(p string) string {
+	if validDownloadSubpath(p) {
+		return strings.TrimSpace(p)
+	}
+	return ""
+}
+
 func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error) {
 	magnetURI = strings.TrimSpace(magnetURI)
 	if len(magnetURI) > maxMagnetURILength {
@@ -96,7 +107,7 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	// engine default if settings lookup fails).
 	downloadPath := ""
 	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
-		downloadPath = userSettings.DownloadPath
+		downloadPath = safeDownloadPath(userSettings.DownloadPath)
 	}
 
 	if _, err := s.engine.Add(ctx, magnetURI, downloadPath); err != nil {
@@ -104,28 +115,78 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 		return nil, mapEngineAddError(err)
 	}
 
-	// Auto-shelf: create a library row with the infoHash as placeholder title.
-	// The real name lands via ApplyMetadata once the swarm delivers metadata.
-	// Conflicts (user re-added the same torrent) are swallowed — idempotency.
-	// Gated by the user's autoAddLibrary setting; users who turn it off keep
-	// torrents in the swarm without having them appear on the library grid.
+	if err := s.autoShelf(ctx, userID, session); err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+// autoShelf creates a library row for the session (title = infoHash placeholder;
+// the real name lands via ApplyMetadata once metadata arrives). Gated by the
+// user's autoAddLibrary setting. Conflicts are swallowed (idempotency).
+func (s *torrentService) autoShelf(ctx context.Context, userID uuid.UUID, session *domain.TorrentSession) error {
 	autoAdd := true
 	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
 		autoAdd = userSettings.AutoAddLibrary
 	}
-	if autoAdd {
-		if _, err := s.library.Create(ctx, domain.LibraryItem{
-			UserID:    userID,
-			SessionID: session.ID,
-			Title:     session.InfoHash,
-			Type:      domain.LibraryTypeOther,
-		}); err != nil {
-			if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
-				return nil, err
-			}
+	if !autoAdd {
+		return nil
+	}
+	if _, err := s.library.Create(ctx, domain.LibraryItem{
+		UserID:    userID,
+		SessionID: session.ID,
+		Title:     session.InfoHash,
+		Type:      domain.LibraryTypeOther,
+	}); err != nil {
+		if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
+			return err
 		}
 	}
+	return nil
+}
 
+// AddFromFile adds a torrent from a raw .torrent file. The infoHash/name come
+// from the engine's parse of the file (the engine derives the hash), then the
+// session is created just like the magnet flow (idempotent per user).
+func (s *torrentService) AddFromFile(ctx context.Context, userID uuid.UUID, torrentFile []byte) (*domain.TorrentSession, error) {
+	if len(torrentFile) == 0 {
+		return nil, domain.NewError(domain.ErrInvalidInput, "empty torrent file", nil)
+	}
+
+	downloadPath := ""
+	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
+		downloadPath = safeDownloadPath(userSettings.DownloadPath)
+	}
+
+	status, err := s.engine.AddFile(ctx, torrentFile, downloadPath)
+	if err != nil {
+		return nil, mapEngineAddError(err)
+	}
+	infoHash := strings.ToLower(status.InfoHash)
+	if infoHash == "" {
+		return nil, domain.NewError(domain.ErrUnavailable, "torrent metadata not available yet", nil)
+	}
+
+	// Idempotent per user: reuse an existing session for this hash.
+	if existing, err := s.sessions.GetByUserAndInfoHash(ctx, userID, infoHash); err == nil {
+		return existing, nil
+	} else if !isNotFound(err) {
+		return nil, err
+	}
+
+	session, err := s.sessions.Create(ctx, domain.TorrentSession{
+		UserID:    userID,
+		InfoHash:  infoHash,
+		MagnetURI: "magnet:?xt=urn:btih:" + infoHash,
+		Status:    domain.StatusFetchingMetadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.autoShelf(ctx, userID, session); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 
@@ -394,7 +455,7 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 		// Fetch the user's download path (best-effort; use default on error).
 		downloadPath := ""
 		if userSettings, settErr := s.settings.GetByUserID(ctx, sess.UserID); settErr == nil {
-			downloadPath = userSettings.DownloadPath
+			downloadPath = safeDownloadPath(userSettings.DownloadPath)
 		}
 
 		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath); err != nil {

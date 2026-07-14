@@ -254,6 +254,10 @@ func registerRoutes(app *fiber.App, d deps) {
 		middleware.RateLimitByUser(d.redis, "torrent-add", 10, time.Hour),
 		torrents.Add,
 	)
+	protected.Post("/torrents/file",
+		middleware.RateLimitByUser(d.redis, "torrent-add", 10, time.Hour),
+		torrents.AddFile,
+	)
 	protected.Get("/torrents", torrents.List)
 	protected.Get("/torrents/:id", torrents.Get)
 	protected.Delete("/torrents/:id", torrents.Delete)

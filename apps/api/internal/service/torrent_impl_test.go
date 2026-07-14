@@ -248,6 +248,13 @@ func (e *fakeEngine) Add(_ context.Context, magnet string, _ string) (EngineTorr
 	return EngineTorrentStatus{InfoHash: "deadbeef", Ready: false}, nil
 }
 
+func (e *fakeEngine) AddFile(_ context.Context, _ []byte, _ string) (EngineTorrentStatus, error) {
+	if e.addErr != nil {
+		return EngineTorrentStatus{}, e.addErr
+	}
+	return EngineTorrentStatus{InfoHash: "0123456789abcdef0123456789abcdef01234567", Name: "sample", Ready: false}, nil
+}
+
 func (e *fakeEngine) Remove(_ context.Context, hash string) error {
 	e.removeCalls = append(e.removeCalls, hash)
 	return nil

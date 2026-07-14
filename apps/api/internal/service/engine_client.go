@@ -7,13 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"time"
 )
 
 // EngineClient talks to the Node.js torrent-engine over HTTP.
 type EngineClient interface {
 	Add(ctx context.Context, magnetURI string, downloadPath string) (EngineTorrentStatus, error)
+	AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error)
 	Remove(ctx context.Context, infoHash string) error
 	SetPriority(ctx context.Context, infoHash string, fileIndex, priority int) error
 	ListArchiveEntries(ctx context.Context, infoHash string, fileIndex int) ([]EngineArchiveEntry, error)
@@ -95,6 +98,51 @@ func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPa
 		return EngineTorrentStatus{}, fmt.Errorf("engine add returned %d: %s", resp.StatusCode, string(raw))
 	}
 
+	var status EngineTorrentStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
+	}
+	return status, nil
+}
+
+func (c *httpEngineClient) AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("torrent", "upload.torrent")
+	if err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	if _, err := fw.Write(torrentFile); err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	_ = w.Close()
+
+	url := c.baseURL + "/engine/torrents/file"
+	if downloadPath != "" {
+		url += "?downloadPath=" + neturl.QueryEscape(downloadPath)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return EngineTorrentStatus{}, fmt.Errorf("engine add file: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code != "" {
+			return EngineTorrentStatus{}, &EngineAddError{Code: body.Code, Message: body.Error}
+		}
+		return EngineTorrentStatus{}, fmt.Errorf("engine add file returned %d: %s", resp.StatusCode, string(raw))
+	}
 	var status EngineTorrentStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
