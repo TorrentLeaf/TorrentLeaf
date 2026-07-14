@@ -37,6 +37,32 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
     }
   })
 
+  app.post('/engine/torrents/file', async (req, reply) => {
+    const data = await req.file()
+    if (!data) {
+      reply.status(400).send({ error: 'no torrent file', code: 'invalid_upload' })
+      return
+    }
+    const buf = await data.toBuffer()
+    if (buf.length === 0 || buf[0] !== 0x64 /* 'd' — bencoded dict */) {
+      reply.status(400).send({ error: 'not a valid .torrent file', code: 'invalid_upload' })
+      return
+    }
+    try {
+      const status = await torrentManager.addFromFile(
+        buf,
+        (req.query as { downloadPath?: string })?.downloadPath,
+      )
+      reply.status(201).send(status)
+    } catch (err) {
+      if (err instanceof AddTorrentError) {
+        reply.status(400).send({ error: err.message, code: err.code })
+        return
+      }
+      reply.status(400).send({ error: (err as Error).message, code: 'add_failed' })
+    }
+  })
+
   app.get('/engine/torrents', async () => torrentManager.list())
 
   app.get<{ Params: { infoHash: string } }>('/engine/torrents/:infoHash', async (req, reply) => {

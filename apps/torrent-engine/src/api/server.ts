@@ -23,6 +23,11 @@ export async function buildServer(): Promise<FastifyInstance> {
     disableRequestLogging: false,
   })
 
+  // Accept .torrent file uploads (small; capped at 10 MB, one file).
+  await app.register(import('@fastify/multipart'), {
+    limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  })
+
   app.addHook('onSend', async (_req, reply) => {
     reply.header('X-Content-Type-Options', 'nosniff')
     reply.header('X-Frame-Options', 'DENY')

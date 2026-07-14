@@ -1,5 +1,6 @@
 import axios from 'axios'
 import Redis from 'ioredis'
+import parseTorrent from 'parse-torrent'
 import { mkdirSync, statfsSync } from 'node:fs'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
@@ -78,6 +79,44 @@ export class TorrentManager {
     return {
       infoHash,
       name: '',
+      ready: false,
+      progress: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      peers: 0,
+      length: 0,
+      downloaded: 0,
+      files: [],
+    }
+  }
+
+  /**
+   * Add a torrent from a raw .torrent file buffer. Same disk guard + safe
+   * download-path resolution as `add`. Returns immediately; the metadata
+   * webhook fires later if the torrent isn't ready yet.
+   */
+  async addFromFile(torrentFile: Buffer, downloadPath?: string): Promise<TorrentStatus> {
+    if (engine.list().length >= config.maxTorrents) {
+      throw new AddTorrentError('max_torrents', `max torrents reached (${config.maxTorrents})`)
+    }
+    // Parse the file up front so we always know the infoHash for the immediate
+    // response — webtorrent doesn't expose it synchronously after add(Buffer).
+    let parsed: { infoHash?: string; name?: string }
+    try {
+      parsed = (await parseTorrent(torrentFile)) as { infoHash?: string; name?: string }
+    } catch {
+      throw new AddTorrentError('invalid_upload', 'not a valid .torrent file')
+    }
+
+    const resolvedPath = resolveDownloadPath(config.downloadPath, downloadPath)
+    mkdirSync(resolvedPath, { recursive: true })
+    this.assertDiskAvailable(resolvedPath)
+
+    const torrent = engine.add(torrentFile, resolvedPath)
+    if (torrent.ready && torrent.infoHash) return this.toStatus(torrent)
+    return {
+      infoHash: (torrent.infoHash || parsed.infoHash || '').toLowerCase(),
+      name: torrent.name || parsed.name || '',
       ready: false,
       progress: 0,
       downloadSpeed: 0,

@@ -31,7 +31,7 @@ export type WTFile = {
 }
 
 type WTClient = {
-  add(uri: string, opts: Record<string, unknown>): WTTorrent | null
+  add(source: string | Buffer, opts: Record<string, unknown>): WTTorrent | null
   remove(id: string, cb?: (err?: Error) => void): void
   on(event: string, cb: (...args: unknown[]) => void): void
   torrents: WTTorrent[]
@@ -70,21 +70,28 @@ class TorrentEngine {
    * @param downloadPath — optional per-torrent download directory; falls back
    *                       to the global config.downloadPath.
    */
-  add(magnetURI: string, downloadPath?: string): WTTorrent {
-    const existing = this.findByMagnet(magnetURI)
-    if (existing) return existing
+  add(source: string | Buffer, downloadPath?: string): WTTorrent {
+    // Dedup-by-hash is only possible when the source is a magnet string; for a
+    // .torrent Buffer, webtorrent dedups internally and returns the existing
+    // torrent if the infoHash already exists.
+    if (typeof source === 'string') {
+      const existing = this.findByMagnet(source)
+      if (existing) return existing
+    }
 
     const effectivePath = downloadPath ?? config.downloadPath
 
     let torrent: WTTorrent | null = null
     try {
-      torrent = this.client.add(magnetURI, {
+      torrent = this.client.add(source, {
         path: effectivePath,
         maxConns: config.maxConnsPerTorrent,
       })
     } catch (err) {
-      const found = this.findByMagnet(magnetURI)
-      if (found) return found
+      if (typeof source === 'string') {
+        const found = this.findByMagnet(source)
+        if (found) return found
+      }
       throw err
     }
 
