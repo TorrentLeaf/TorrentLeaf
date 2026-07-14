@@ -3,8 +3,10 @@
 import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { MagnetInput } from '@/components/shared/MagnetInput'
+import { TorrentFileInput } from '@/components/shared/TorrentFileInput'
 import { AppPageShell } from '@/components/dashboard/app-page-shell'
 import { api } from '@/lib/api'
+import { addTorrentFile } from '@/lib/torrents'
 import { useToast } from '@/hooks/use-toast'
 
 export default function AddTorrentPage() {
@@ -26,6 +28,21 @@ export default function AddTorrentPage() {
     }
   }
 
+  async function handleAddFile(file: File) {
+    try {
+      const data = await addTorrentFile(file)
+      toast({ title: 'Torrent added', description: data.name || 'Fetching metadata…' })
+      router.push(`/torrents/${data.id}` as never)
+    } catch (err) {
+      toast({
+        title: 'Could not add torrent',
+        description: err instanceof Error ? err.message : 'Unexpected error',
+        variant: 'destructive',
+      })
+      throw err
+    }
+  }
+
   return (
     <AppPageShell>
       <div className="mx-auto w-full max-w-3xl space-y-6 p-5 md:p-6 lg:p-8">
@@ -43,6 +60,16 @@ export default function AddTorrentPage() {
           </CardHeader>
           <CardContent>
             <MagnetInput onSubmit={handleAdd} />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Torrent file</CardTitle>
+            <CardDescription>Upload a .torrent file to start reading from it.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <TorrentFileInput onSubmit={handleAddFile} />
           </CardContent>
         </Card>
       </div>

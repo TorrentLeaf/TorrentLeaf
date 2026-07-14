@@ -54,3 +54,11 @@ export async function addTorrent(magnetURI: string): Promise<TorrentSession> {
   const { data } = await api.post<TorrentSession>('/torrents', { magnetURI })
   return data
 }
+
+export async function addTorrentFile(file: File): Promise<{ id: string; name: string }> {
+  const form = new FormData()
+  form.append('torrent', file)
+  // axios sets the multipart boundary automatically for FormData.
+  const { data } = await api.post<{ id: string; name: string }>('/torrents/file', form)
+  return data
+}
