@@ -1,4 +1,5 @@
 import { api } from './api'
+import type { LibraryFormat } from './library-format'
 
 export type LibraryItemType = 'manga' | 'book' | 'document' | 'video' | 'other'
 
@@ -8,6 +9,7 @@ export interface LibraryCard {
   title: string
   coverUrl?: string
   type: LibraryItemType
+  format: LibraryFormat
   addedAt: string
   isFavorite: boolean
   currentPage: number

@@ -11,6 +11,7 @@ import { Sidebar } from '@/components/dashboard/sidebar'
 import { UserMenu } from '@/components/layout/user-menu'
 import { useViewport } from '@/hooks/use-viewport'
 import type { DashboardCounts, DashboardFilter } from '@/lib/dashboard'
+import type { LibraryFormat } from '@/lib/library-format'
 import { cn } from '@/lib/utils'
 
 // The shared app window frame: full-bleed surface, WindowChrome (brand + login),
@@ -24,6 +25,9 @@ export type AppShellProps = {
   /** Highlight the Settings nav item (on /settings). */
   settingsActive?: boolean
   onFilterChange: (f: DashboardFilter) => void
+  libraryCounts: Record<LibraryFormat, number>
+  activeFormat?: LibraryFormat
+  onLibraryFormat: (format: LibraryFormat) => void
   onAdd?: () => void
   onSettings?: () => void
   notifications: boolean
@@ -45,6 +49,9 @@ export function AppShell({
   activeFilter,
   settingsActive,
   onFilterChange,
+  libraryCounts,
+  activeFormat,
+  onLibraryFormat,
   onAdd,
   onSettings,
   notifications,
@@ -60,6 +67,9 @@ export function AppShell({
     counts,
     filter: activeFilter,
     settingsActive,
+    libraryCounts,
+    activeFormat,
+    onLibraryFormat,
     notifications,
     onNotificationsChange,
     darkTheme,

@@ -51,6 +51,8 @@ export function LandingPreview() {
               counts={dash.counts}
               filter={dash.filter}
               onFilterChange={dash.setFilter}
+              libraryCounts={{ comics: 0, books: 0, pdfs: 0, video: 0, other: 0 }}
+              onLibraryFormat={() => {}}
               notifications={notifications}
               onNotificationsChange={setNotifications}
               darkTheme={darkTheme}

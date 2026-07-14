@@ -7,6 +7,7 @@ import { StatsPanel, type StatCell } from '@/components/dashboard/stats-panel'
 import { AppShell } from '@/components/dashboard/app-shell'
 import { useViewport } from '@/hooks/use-viewport'
 import type { DashboardCounts, DashboardFilter, DashboardTorrent } from '@/lib/dashboard'
+import type { LibraryFormat } from '@/lib/library-format'
 import { cn } from '@/lib/utils'
 
 export type ChartMode = 'download' | 'upload'
@@ -16,6 +17,9 @@ export type DashboardShellProps = {
   counts: DashboardCounts
   filter: DashboardFilter
   onFilterChange: (f: DashboardFilter) => void
+  libraryCounts: Record<LibraryFormat, number>
+  activeFormat?: LibraryFormat
+  onLibraryFormat: (format: LibraryFormat) => void
   activeId?: string
   onActiveChange?: (id: string) => void
   history: number[]
@@ -38,7 +42,8 @@ export type DashboardShellProps = {
 // (table/cards + chart + stats).
 export function DashboardShell(props: DashboardShellProps) {
   const {
-    torrents, counts, filter, onFilterChange, activeId, onActiveChange, history,
+    torrents, counts, filter, onFilterChange, libraryCounts, activeFormat, onLibraryFormat,
+    activeId, onActiveChange, history,
     downRate, upRate, stats, chartMode, onChartModeChange,
     notifications, onNotificationsChange, darkTheme, onDarkThemeChange,
     onAdd, onSettings, hideSeeds, animateTip = true,
@@ -50,6 +55,9 @@ export function DashboardShell(props: DashboardShellProps) {
       counts={counts}
       activeFilter={filter}
       onFilterChange={onFilterChange}
+      libraryCounts={libraryCounts}
+      activeFormat={activeFormat}
+      onLibraryFormat={onLibraryFormat}
       onAdd={onAdd}
       onSettings={onSettings}
       notifications={notifications}

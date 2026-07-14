@@ -6,7 +6,9 @@ import { useQuery } from '@tanstack/react-query'
 
 import { AppShell } from '@/components/dashboard/app-shell'
 import { listTorrents } from '@/lib/torrents'
+import { fetchLibrary } from '@/lib/library'
 import { computeCounts, sessionToDashboard } from '@/lib/dashboard'
+import { countByFormat, type LibraryFormat } from '@/lib/library-format'
 
 // Frame for the non-dashboard app pages (/torrents/[id], /settings): the shared
 // AppShell with the sidebar wired to navigate by route (filters → /library,
@@ -26,11 +28,16 @@ export function AppPageShell({
   const { data: sessions = [] } = useQuery({ queryKey: ['torrents'], queryFn: listTorrents })
   const counts = computeCounts(sessions.map((s) => sessionToDashboard(s)))
 
+  const { data: cards = [] } = useQuery({ queryKey: ['library', 'all'], queryFn: () => fetchLibrary('all') })
+  const libraryCounts = countByFormat(cards)
+
   return (
     <AppShell
       counts={counts}
       settingsActive={settingsActive}
       onFilterChange={() => router.push('/library' as never)}
+      libraryCounts={libraryCounts}
+      onLibraryFormat={(f: LibraryFormat) => router.push(`/library?format=${f}` as never)}
       onAdd={() => router.push('/add')}
       onSettings={() => router.push('/settings' as never)}
       notifications={notifications}
