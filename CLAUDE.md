@@ -265,7 +265,8 @@ async function streamFileChunk(torrentId: string, fileIndex: number, range: Rang
 - `<PageTurnAnimation>` — animação de virar página (opcional)
 
 ### Regras Visuais
-- Dark mode como PADRÃO e único modo (por ora)
+- Dark mode é o PADRÃO; light theme suportado via next-themes (toggle na sidebar).
+  Superfícies imersivas (readers, video player) permanecem escuras por design.
 - Radius: `--radius: 0.75rem` para cards, `0.5rem` para inputs, `0.375rem` para badges
 - Sombras sutis: `shadow-sm` é o máximo para elementos flat
 - Transições: `transition-all duration-200` padrão, `duration-300` para modais
