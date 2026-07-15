@@ -35,6 +35,9 @@ export default defineConfig({
         'src/components/player/**',
         'src/components/ui/**',
         'src/components/marketing/**',
+        // Landing-preview animation glue (marketing-only), not product logic.
+        'src/components/dashboard/landing-preview.tsx',
+        'src/hooks/use-animated-dashboard.ts',
       ],
     },
   },
