@@ -110,7 +110,7 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 		downloadPath = safeDownloadPath(userSettings.DownloadPath)
 	}
 
-	if _, err := s.engine.Add(ctx, magnetURI, downloadPath); err != nil {
+	if _, err := s.engine.Add(ctx, magnetURI, downloadPath, false); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
 		return nil, mapEngineAddError(err)
 	}
@@ -458,7 +458,7 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 			downloadPath = safeDownloadPath(userSettings.DownloadPath)
 		}
 
-		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath); err != nil {
+		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath, true); err != nil {
 			// Record which torrent failed and why (engine code when available)
 			// so the aggregate log is legible instead of an opaque "failed N/M".
 			reason := "engine unavailable"

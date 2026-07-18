@@ -58,7 +58,7 @@ func (s *adminService) ResumeTorrent(ctx context.Context, id uuid.UUID) error {
 			fmt.Sprintf("cannot resume session in status %s", session.Status), nil)
 	}
 	if session.MagnetURI != "" {
-		if _, err := s.engine.Add(ctx, session.MagnetURI, ""); err != nil {
+		if _, err := s.engine.Add(ctx, session.MagnetURI, "", true); err != nil {
 			return fmt.Errorf("engine re-add: %w", err)
 		}
 	}

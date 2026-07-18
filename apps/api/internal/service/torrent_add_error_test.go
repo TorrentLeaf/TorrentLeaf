@@ -71,6 +71,25 @@ func TestReseedEngine_ReportsPerTorrentReason(t *testing.T) {
 	}
 }
 
+func TestReseedEngine_MarksAddsAsReseed(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	ctx := context.Background()
+	if _, err := sr.Create(ctx, domain.TorrentSession{
+		UserID:    uuid.New(),
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		MagnetURI: validMagnet,
+		Status:    domain.StatusSeeding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReseedEngine(ctx); err != nil {
+		t.Fatalf("reseed: %v", err)
+	}
+	if len(e.addReseeds) != 1 || !e.addReseeds[0] {
+		t.Fatalf("reseed should call engine.Add with reseed=true, got %v", e.addReseeds)
+	}
+}
+
 func TestAdd_EngineDown_StaysUnavailableAndHidesDetail(t *testing.T) {
 	svc, _, _, e := newTestTorrentSvc()
 	e.addErr = errors.New("dial tcp torrent-engine:9000: connect: connection refused")

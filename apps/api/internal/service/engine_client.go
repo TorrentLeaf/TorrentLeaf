@@ -15,7 +15,7 @@ import (
 
 // EngineClient talks to the Node.js torrent-engine over HTTP.
 type EngineClient interface {
-	Add(ctx context.Context, magnetURI string, downloadPath string) (EngineTorrentStatus, error)
+	Add(ctx context.Context, magnetURI string, downloadPath string, reseed bool) (EngineTorrentStatus, error)
 	AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error)
 	Remove(ctx context.Context, infoHash string) error
 	SetPriority(ctx context.Context, infoHash string, fileIndex, priority int) error
@@ -67,10 +67,13 @@ func NewEngineClient(baseURL string) EngineClient {
 	}
 }
 
-func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPath string) (EngineTorrentStatus, error) {
-	payload := map[string]string{"magnetURI": magnetURI}
+func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPath string, reseed bool) (EngineTorrentStatus, error) {
+	payload := map[string]any{"magnetURI": magnetURI}
 	if downloadPath != "" {
 		payload["downloadPath"] = downloadPath
+	}
+	if reseed {
+		payload["reseed"] = true
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,

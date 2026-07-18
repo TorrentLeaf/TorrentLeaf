@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -23,7 +24,7 @@ func TestEngineClient_Add(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"infoHash":"abc","name":"OP","ready":true,"peers":3}`))
 	})
-	st, err := c.Add(context.Background(), "magnet:?x", "manga")
+	st, err := c.Add(context.Background(), "magnet:?x", "manga", false)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -32,12 +33,31 @@ func TestEngineClient_Add(t *testing.T) {
 	}
 }
 
+func TestEngineClient_Add_SerializesReseed(t *testing.T) {
+	var gotReseed bool
+	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			MagnetURI string `json:"magnetURI"`
+			Reseed    bool   `json:"reseed"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotReseed = body.Reseed
+		_, _ = w.Write([]byte(`{"infoHash":"abc","ready":false}`))
+	})
+	if _, err := c.Add(context.Background(), "magnet:?x", "", true); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if !gotReseed {
+		t.Fatal("reseed=true should be serialized into the request body")
+	}
+}
+
 func TestEngineClient_Add_TypedError(t *testing.T) {
 	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
 		_, _ = w.Write([]byte(`{"error":"not enough free disk space","code":"insufficient_disk"}`))
 	})
-	_, err := c.Add(context.Background(), "magnet:?x", "")
+	_, err := c.Add(context.Background(), "magnet:?x", "", false)
 	var ae *EngineAddError
 	if !errors.As(err, &ae) || ae.Code != "insufficient_disk" {
 		t.Fatalf("want EngineAddError insufficient_disk, got %v", err)
@@ -52,7 +72,7 @@ func TestEngineClient_Add_UntypedError(t *testing.T) {
 		w.WriteHeader(500)
 		_, _ = w.Write([]byte(`boom`))
 	})
-	_, err := c.Add(context.Background(), "magnet:?x", "")
+	_, err := c.Add(context.Background(), "magnet:?x", "", false)
 	if err == nil || !strings.Contains(err.Error(), "500") {
 		t.Fatalf("want plain 500 error, got %v", err)
 	}

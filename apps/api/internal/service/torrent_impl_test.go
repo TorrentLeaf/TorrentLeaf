@@ -230,6 +230,7 @@ func (r *fakeSettingsRepo) Upsert(_ context.Context, s domain.UserSettings) (*do
 type fakeEngine struct {
 	addErr      error
 	addCalls    []string
+	addReseeds  []bool
 	removeCalls []string
 	priorityCalls []struct {
 		Hash        string
@@ -240,8 +241,9 @@ type fakeEngine struct {
 	liveList       []EngineTorrentStatus
 }
 
-func (e *fakeEngine) Add(_ context.Context, magnet string, _ string) (EngineTorrentStatus, error) {
+func (e *fakeEngine) Add(_ context.Context, magnet string, _ string, reseed bool) (EngineTorrentStatus, error) {
 	e.addCalls = append(e.addCalls, magnet)
+	e.addReseeds = append(e.addReseeds, reseed)
 	if e.addErr != nil {
 		return EngineTorrentStatus{}, e.addErr
 	}
