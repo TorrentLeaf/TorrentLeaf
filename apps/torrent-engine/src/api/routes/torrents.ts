@@ -11,6 +11,7 @@ const AddBody = z.object({
     .max(2048)
     .regex(/^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(&.*)?$/),
   downloadPath: z.string().max(512).optional(),
+  reseed: z.boolean().optional(),
 })
 
 const PriorityBody = z.object({
@@ -26,7 +27,9 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
       return
     }
     try {
-      const status = torrentManager.add(parsed.data.magnetURI, parsed.data.downloadPath)
+      const status = torrentManager.add(parsed.data.magnetURI, parsed.data.downloadPath, {
+        reseed: parsed.data.reseed,
+      })
       reply.status(201).send(status)
     } catch (err) {
       if (err instanceof AddTorrentError) {
