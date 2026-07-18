@@ -138,8 +138,8 @@ export class TorrentManager {
     return this.toStatus(t)
   }
 
-  async remove(infoHash: string): Promise<void> {
-    await engine.remove(infoHash)
+  async remove(infoHash: string, opts: { destroyStore?: boolean } = {}): Promise<void> {
+    await engine.remove(infoHash, opts)
   }
 
   list(): TorrentStatus[] {

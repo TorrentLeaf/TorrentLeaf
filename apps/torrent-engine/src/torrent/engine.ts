@@ -32,7 +32,7 @@ export type WTFile = {
 
 type WTClient = {
   add(source: string | Buffer, opts: Record<string, unknown>): WTTorrent | null
-  remove(id: string, cb?: (err?: Error) => void): void
+  remove(id: string, opts?: { destroyStore?: boolean }, cb?: (err?: Error) => void): void
   on(event: string, cb: (...args: unknown[]) => void): void
   torrents: WTTorrent[]
 }
@@ -119,7 +119,7 @@ class TorrentEngine {
     return this.client.torrents.find((t) => t.infoHash === infoHash)
   }
 
-  remove(infoHash: string): Promise<void> {
+  remove(infoHash: string, opts: { destroyStore?: boolean } = {}): Promise<void> {
     // Idempotent: removing a torrent the client doesn't have is a no-op.
     // webtorrent's client.remove() throws "No torrent with id <hash>" for
     // unknown hashes — and in 2.x that throw can surface asynchronously,
@@ -131,7 +131,9 @@ class TorrentEngine {
     }
     return new Promise((resolve, reject) => {
       try {
-        this.client.remove(infoHash, (err) => (err ? reject(err) : resolve()))
+        this.client.remove(infoHash, { destroyStore: opts.destroyStore === true }, (err) =>
+          err ? reject(err) : resolve(),
+        )
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)))
       }

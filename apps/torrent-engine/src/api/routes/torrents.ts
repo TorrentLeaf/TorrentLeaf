@@ -80,7 +80,8 @@ export async function registerTorrentRoutes(app: FastifyInstance): Promise<void>
     '/engine/torrents/:infoHash',
     async (req, reply) => {
       try {
-        await torrentManager.remove(req.params.infoHash)
+        const destroyStore = (req.query as { destroyStore?: string })?.destroyStore === 'true'
+        await torrentManager.remove(req.params.infoHash, { destroyStore })
         clearTranscodeCache(req.params.infoHash)
         clearArchiveCache(req.params.infoHash)
         reply.status(204).send()
