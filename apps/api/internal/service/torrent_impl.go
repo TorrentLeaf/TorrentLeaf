@@ -261,7 +261,13 @@ func (s *torrentService) Delete(ctx context.Context, userID, id uuid.UUID) error
 	if session.UserID != userID {
 		return domain.NewError(domain.ErrNotFound, "torrent session not found", nil)
 	}
-	if err := s.engine.Remove(ctx, session.InfoHash); err != nil {
+	// Only wipe files from disk when this is the last session pointing at the
+	// torrent — other users may still be reading the same info_hash.
+	destroyStore := false
+	if n, cErr := s.sessions.CountByInfoHash(ctx, session.InfoHash); cErr == nil && n <= 1 {
+		destroyStore = true
+	}
+	if err := s.engine.Remove(ctx, session.InfoHash, destroyStore); err != nil {
 		// Engine-level removal is best-effort — proceed with DB cleanup.
 		_ = err
 	}

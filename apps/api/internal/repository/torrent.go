@@ -18,6 +18,8 @@ type TorrentRepository interface {
 	UpdateStatus(ctx context.Context, id uuid.UUID, status domain.TorrentStatus) error
 	UpdateMetadata(ctx context.Context, infoHash, name string, totalSize int64) error
 	Delete(ctx context.Context, id uuid.UUID) error
+	// CountByInfoHash returns how many sessions reference an info_hash (any user).
+	CountByInfoHash(ctx context.Context, infoHash string) (int, error)
 }
 
 type TorrentFileRepository interface {

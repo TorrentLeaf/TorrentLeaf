@@ -84,6 +84,10 @@ func (f *fakeTorrentService) ReseedEngine(_ context.Context) error {
 	return nil
 }
 
+func (f *fakeTorrentService) ReseedEngineWithRetry(_ context.Context) error {
+	return nil
+}
+
 // injectUser fakes the RequireAuth middleware's contract: populate userID in
 // the Fiber context so the handler can scope the request to that user.
 func injectUser(uid uuid.UUID) fiber.Handler {

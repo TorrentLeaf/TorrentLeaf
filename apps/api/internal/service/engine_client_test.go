@@ -143,6 +143,20 @@ func TestEngineClient_Health_Error(t *testing.T) {
 	}
 }
 
+func TestEngineClient_Remove_DestroyStore(t *testing.T) {
+	var gotQuery string
+	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.WriteHeader(204)
+	})
+	if err := c.Remove(context.Background(), "abc", true); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if gotQuery != "destroyStore=true" {
+		t.Fatalf("want destroyStore=true query, got %q", gotQuery)
+	}
+}
+
 func TestEngineClient_Remove(t *testing.T) {
 	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {
@@ -150,21 +164,21 @@ func TestEngineClient_Remove(t *testing.T) {
 		}
 		w.WriteHeader(204)
 	})
-	if err := c.Remove(context.Background(), "abc"); err != nil {
+	if err := c.Remove(context.Background(), "abc", false); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 }
 
 func TestEngineClient_Remove_404Tolerated(t *testing.T) {
 	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(404) })
-	if err := c.Remove(context.Background(), "gone"); err != nil {
+	if err := c.Remove(context.Background(), "gone", false); err != nil {
 		t.Fatalf("404 should be tolerated, got %v", err)
 	}
 }
 
 func TestEngineClient_Remove_Error(t *testing.T) {
 	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
-	if err := c.Remove(context.Background(), "x"); err == nil {
+	if err := c.Remove(context.Background(), "x", false); err == nil {
 		t.Fatal("want error on 500")
 	}
 }

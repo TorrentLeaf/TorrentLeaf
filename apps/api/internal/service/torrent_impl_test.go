@@ -143,6 +143,18 @@ func (r *fakeTorrentRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *fakeTorrentRepo) CountByInfoHash(_ context.Context, infoHash string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sessions {
+		if s.InfoHash == infoHash {
+			n++
+		}
+	}
+	return n, nil
+}
+
 type fakeFileRepo struct {
 	mu    sync.Mutex
 	files map[uuid.UUID][]domain.TorrentFile
@@ -241,6 +253,7 @@ type fakeEngine struct {
 	liveList       []EngineTorrentStatus
 	healthErrs     []error
 	healthCalls    int
+	removeDestroy  map[string]bool
 }
 
 func (e *fakeEngine) Add(_ context.Context, magnet string, _ string, reseed bool) (EngineTorrentStatus, error) {
@@ -259,8 +272,11 @@ func (e *fakeEngine) AddFile(_ context.Context, _ []byte, _ string) (EngineTorre
 	return EngineTorrentStatus{InfoHash: "0123456789abcdef0123456789abcdef01234567", Name: "sample", Ready: false}, nil
 }
 
-func (e *fakeEngine) Remove(_ context.Context, hash string) error {
+func (e *fakeEngine) Remove(_ context.Context, hash string, destroyStore bool) error {
 	e.removeCalls = append(e.removeCalls, hash)
+	if e.removeDestroy != nil {
+		e.removeDestroy[hash] = destroyStore
+	}
 	return nil
 }
 
@@ -574,6 +590,43 @@ func TestListReturnsOnlyCallerSessions(t *testing.T) {
 	}
 	if sessions[0].UserID != owner {
 		t.Errorf("list leaked cross-user session: %s", sessions[0].UserID)
+	}
+}
+
+func TestDelete_DestroysStoreOnlyOnLastReference(t *testing.T) {
+	ctx := context.Background()
+
+	// Last reference → destroyStore true.
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	uid := uuid.New()
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uid, InfoHash: "hashA", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	if err := svc.Delete(ctx, uid, s.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !e.removeDestroy["hashA"] {
+		t.Fatal("last reference should destroy the store")
+	}
+
+	// Two references → destroyStore false for the first delete.
+	svc2, sr2, _, e2 := newTestTorrentSvc()
+	e2.removeDestroy = map[string]bool{}
+	u1, u2 := uuid.New(), uuid.New()
+	s1, _ := sr2.Create(ctx, domain.TorrentSession{
+		UserID: u1, InfoHash: "hashB", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	if _, err := sr2.Create(ctx, domain.TorrentSession{
+		UserID: u2, InfoHash: "hashB", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc2.Delete(ctx, u1, s1.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if e2.removeDestroy["hashB"] {
+		t.Fatal("another session still references the hash — must NOT destroy the store")
 	}
 }
 

@@ -144,6 +144,15 @@ func (r *torrentRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *torrentRepo) CountByInfoHash(ctx context.Context, infoHash string) (int, error) {
+	const q = `SELECT COUNT(*) FROM torrent_sessions WHERE info_hash = $1`
+	var n int
+	if err := r.pool.QueryRow(ctx, q, infoHash).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count by info hash: %w", err)
+	}
+	return n, nil
+}
+
 func (r *torrentRepo) getBy(ctx context.Context, where string, arg any) (*domain.TorrentSession, error) {
 	q := "SELECT " + torrentSessionColumns + " FROM torrent_sessions WHERE " + where + " LIMIT 1"
 	row := r.pool.QueryRow(ctx, q, arg)

@@ -17,7 +17,7 @@ import (
 type EngineClient interface {
 	Add(ctx context.Context, magnetURI string, downloadPath string, reseed bool) (EngineTorrentStatus, error)
 	AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error)
-	Remove(ctx context.Context, infoHash string) error
+	Remove(ctx context.Context, infoHash string, destroyStore bool) error
 	SetPriority(ctx context.Context, infoHash string, fileIndex, priority int) error
 	ListArchiveEntries(ctx context.Context, infoHash string, fileIndex int) ([]EngineArchiveEntry, error)
 	// List returns the engine's live state for every active torrent. Used to
@@ -192,9 +192,12 @@ func (c *httpEngineClient) List(ctx context.Context) ([]EngineTorrentStatus, err
 	return out, nil
 }
 
-func (c *httpEngineClient) Remove(ctx context.Context, infoHash string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-		c.baseURL+"/engine/torrents/"+infoHash, nil)
+func (c *httpEngineClient) Remove(ctx context.Context, infoHash string, destroyStore bool) error {
+	url := c.baseURL + "/engine/torrents/" + infoHash
+	if destroyStore {
+		url += "?destroyStore=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return err
 	}
