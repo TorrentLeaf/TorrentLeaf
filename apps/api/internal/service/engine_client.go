@@ -24,6 +24,8 @@ type EngineClient interface {
 	// overlay real progress/peers/speeds onto the persisted sessions, which
 	// only store zeros for those fields.
 	List(ctx context.Context) ([]EngineTorrentStatus, error)
+	// Health returns nil when the engine answers GET /engine/health with 200.
+	Health(ctx context.Context) error
 }
 
 type EngineTorrentStatus struct {
@@ -106,6 +108,22 @@ func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPa
 		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
 	}
 	return status, nil
+}
+
+func (c *httpEngineClient) Health(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/engine/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("engine health: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("engine health returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (c *httpEngineClient) AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error) {

@@ -124,6 +124,25 @@ func TestEngineClient_List_Error(t *testing.T) {
 	}
 }
 
+func TestEngineClient_Health(t *testing.T) {
+	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/engine/health" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	if err := c.Health(context.Background()); err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+}
+
+func TestEngineClient_Health_Error(t *testing.T) {
+	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) })
+	if err := c.Health(context.Background()); err == nil {
+		t.Fatal("want error on 503")
+	}
+}
+
 func TestEngineClient_Remove(t *testing.T) {
 	c := newEngine(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete {

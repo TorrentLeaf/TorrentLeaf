@@ -114,7 +114,7 @@ func main() {
 	// from engine restarts (the engine stores no state in-process). We run
 	// this in a goroutine so it doesn't block the HTTP listener.
 	go func() {
-		if err := torrentSvc.ReseedEngine(context.Background()); err != nil {
+		if err := torrentSvc.ReseedEngineWithRetry(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("engine reseed completed with errors")
 		} else {
 			log.Info().Msg("engine reseed completed successfully")

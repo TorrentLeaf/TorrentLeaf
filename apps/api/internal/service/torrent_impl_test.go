@@ -239,6 +239,8 @@ type fakeEngine struct {
 	archiveEntries map[string][]EngineArchiveEntry // keyed by "hash:fileIdx"
 	archiveErr     error
 	liveList       []EngineTorrentStatus
+	healthErrs     []error
+	healthCalls    int
 }
 
 func (e *fakeEngine) Add(_ context.Context, magnet string, _ string, reseed bool) (EngineTorrentStatus, error) {
@@ -272,6 +274,15 @@ func (e *fakeEngine) SetPriority(_ context.Context, hash string, idx, prio int) 
 
 func (e *fakeEngine) List(_ context.Context) ([]EngineTorrentStatus, error) {
 	return e.liveList, nil
+}
+
+func (e *fakeEngine) Health(_ context.Context) error {
+	i := e.healthCalls
+	e.healthCalls++
+	if i < len(e.healthErrs) {
+		return e.healthErrs[i]
+	}
+	return nil
 }
 
 func (e *fakeEngine) ListArchiveEntries(_ context.Context, hash string, fileIdx int) ([]EngineArchiveEntry, error) {

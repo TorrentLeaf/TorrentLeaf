@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,6 +22,7 @@ type torrentService struct {
 	library  repository.LibraryRepository
 	settings repository.SettingsRepository
 	engine   EngineClient
+	sleepFn  func(time.Duration)
 }
 
 func NewTorrentService(
@@ -30,7 +32,7 @@ func NewTorrentService(
 	settings repository.SettingsRepository,
 	engine EngineClient,
 ) TorrentService {
-	return &torrentService{sessions: sessions, files: files, library: library, settings: settings, engine: engine}
+	return &torrentService{sessions: sessions, files: files, library: library, settings: settings, engine: engine, sleepFn: time.Sleep}
 }
 
 // maxMagnetURILength bounds the magnet URI an API client may submit. The
@@ -477,5 +479,31 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 			added, skipped, len(failures), len(sessions), strings.Join(failures, ", "))
 	}
 	return nil
+}
+
+// ReseedEngineWithRetry waits for the engine to become healthy, then reseeds.
+// The engine holds torrent state only in RAM, so at API startup it may not be
+// ready yet (startup race). We poll /engine/health with bounded exponential
+// backoff, then run a single reseed pass once healthy. Per-torrent add errors
+// are surfaced by ReseedEngine and do not trigger another health loop.
+func (s *torrentService) ReseedEngineWithRetry(ctx context.Context) error {
+	const maxAttempts = 6
+	const maxBackoff = 30 * time.Second
+	backoff := time.Second
+
+	for attempt := 1; ; attempt++ {
+		if err := s.engine.Health(ctx); err == nil {
+			return s.ReseedEngine(ctx)
+		} else if attempt >= maxAttempts {
+			return fmt.Errorf("reseed: engine not healthy after %d attempts: %w", attempt, err)
+		}
+		s.sleepFn(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
 }
 

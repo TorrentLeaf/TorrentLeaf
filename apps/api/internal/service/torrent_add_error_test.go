@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -68,6 +69,33 @@ func TestReseedEngine_ReportsPerTorrentReason(t *testing.T) {
 	if !strings.Contains(err.Error(), "0123456789abcdef0123456789abcdef01234567") ||
 		!strings.Contains(err.Error(), "insufficient_disk") {
 		t.Fatalf("reseed error should name the torrent + reason, got %q", err.Error())
+	}
+}
+
+func TestReseedEngineWithRetry_WaitsForHealth(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	ts := svc.(*torrentService)
+	ts.sleepFn = func(time.Duration) {} // no real waiting
+	e.healthErrs = []error{errors.New("down"), errors.New("down")} // healthy on 3rd
+
+	ctx := context.Background()
+	if _, err := sr.Create(ctx, domain.TorrentSession{
+		UserID:    uuid.New(),
+		InfoHash:  "0123456789abcdef0123456789abcdef01234567",
+		MagnetURI: validMagnet,
+		Status:    domain.StatusSeeding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ts.ReseedEngineWithRetry(ctx); err != nil {
+		t.Fatalf("want success once healthy, got %v", err)
+	}
+	if e.healthCalls != 3 {
+		t.Fatalf("want 3 health checks, got %d", e.healthCalls)
+	}
+	if len(e.addReseeds) != 1 || !e.addReseeds[0] {
+		t.Fatalf("want one reseed add after becoming healthy, got %v", e.addReseeds)
 	}
 }
 

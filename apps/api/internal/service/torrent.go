@@ -26,6 +26,9 @@ type TorrentService interface {
 	// to the engine. Called at API startup so that readers and streaming
 	// continue to work after an engine restart.
 	ReseedEngine(ctx context.Context) error
+
+	// ReseedEngineWithRetry waits for engine health then reseeds (startup use).
+	ReseedEngineWithRetry(ctx context.Context) error
 }
 
 type MetadataFile struct {
