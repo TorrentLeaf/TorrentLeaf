@@ -118,6 +118,63 @@ func TestReseedEngine_MarksAddsAsReseed(t *testing.T) {
 	}
 }
 
+func TestEvictStale_EvictsAndFreesDiskOnLastReference(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	ctx := context.Background()
+	old, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "stalehash", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	// Force it stale.
+	old.LastTouchedAt = time.Now().Add(-100 * time.Hour)
+	sr.sessions[old.ID] = old
+
+	n, err := svc.EvictStale(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("EvictStale: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 evicted, got %d", n)
+	}
+	if !e.removeDestroy["stalehash"] {
+		t.Fatal("last reference should destroy the store")
+	}
+	if got := sr.sessions[old.ID].Status; got != domain.StatusEvicted {
+		t.Fatalf("want status evicted, got %s", got)
+	}
+}
+
+func TestEnsureAvailable_ReAddsEvicted(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	ctx := context.Background()
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "h", MagnetURI: validMagnet, Status: domain.StatusEvicted,
+	})
+	if err := svc.EnsureAvailable(ctx, s.ID); err != nil {
+		t.Fatalf("EnsureAvailable: %v", err)
+	}
+	if len(e.addCalls) != 1 {
+		t.Fatalf("want 1 re-add, got %d", len(e.addCalls))
+	}
+	if got := sr.sessions[s.ID].Status; got != domain.StatusDownloading {
+		t.Fatalf("want status downloading after re-add, got %s", got)
+	}
+}
+
+func TestEnsureAvailable_NoopWhenActive(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	ctx := context.Background()
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "h", MagnetURI: validMagnet, Status: domain.StatusDownloading,
+	})
+	if err := svc.EnsureAvailable(ctx, s.ID); err != nil {
+		t.Fatalf("EnsureAvailable: %v", err)
+	}
+	if len(e.addCalls) != 0 {
+		t.Fatalf("active session must not be re-added, got %d adds", len(e.addCalls))
+	}
+}
+
 func TestAdd_EngineDown_StaysUnavailableAndHidesDetail(t *testing.T) {
 	svc, _, _, e := newTestTorrentSvc()
 	e.addErr = errors.New("dial tcp torrent-engine:9000: connect: connection refused")

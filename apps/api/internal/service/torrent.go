@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -29,6 +30,12 @@ type TorrentService interface {
 
 	// ReseedEngineWithRetry waits for engine health then reseeds (startup use).
 	ReseedEngineWithRetry(ctx context.Context) error
+
+	// EvictStale removes disk data for sessions idle past ttl, preserving the
+	// session (status→evicted). Returns how many were evicted.
+	EvictStale(ctx context.Context, ttl time.Duration) (int, error)
+	// EnsureAvailable re-adds an evicted session to the engine before a read.
+	EnsureAvailable(ctx context.Context, sessionID uuid.UUID) error
 }
 
 type MetadataFile struct {

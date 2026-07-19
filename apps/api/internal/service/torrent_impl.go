@@ -120,6 +120,7 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	if err := s.autoShelf(ctx, userID, session); err != nil {
 		return nil, err
 	}
+	_ = s.sessions.Touch(ctx, session.ID)
 	return session, nil
 }
 
@@ -511,5 +512,57 @@ func (s *torrentService) ReseedEngineWithRetry(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// EvictStale frees disk for torrents idle past ttl. The session and reading
+// progress are preserved (status→evicted, downloaded_bytes→0); reading re-adds
+// via EnsureAvailable. destroyStore only fires when no other active session
+// shares the info_hash.
+func (s *torrentService) EvictStale(ctx context.Context, ttl time.Duration) (int, error) {
+	cutoff := time.Now().Add(-ttl)
+	stale, err := s.sessions.ListStale(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("evict: list stale: %w", err)
+	}
+	evicted := 0
+	for i := range stale {
+		sess := stale[i]
+		destroyStore := false
+		if n, cErr := s.sessions.CountActiveByInfoHash(ctx, sess.InfoHash, sess.ID); cErr == nil && n == 0 {
+			destroyStore = true
+		}
+		_ = s.engine.Remove(ctx, sess.InfoHash, destroyStore) // best-effort
+		if err := s.sessions.MarkEvicted(ctx, sess.ID); err != nil {
+			continue
+		}
+		evicted++
+	}
+	return evicted, nil
+}
+
+// EnsureAvailable re-adds an evicted session's torrent to the engine so a read
+// can proceed. No-op for any non-evicted status. reseed=false because the data
+// was destroyed on eviction — this is a genuine re-download and must respect
+// the disk floor (which eviction just freed).
+func (s *torrentService) EnsureAvailable(ctx context.Context, sessionID uuid.UUID) error {
+	sess, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Status != domain.StatusEvicted {
+		return nil
+	}
+	downloadPath := ""
+	if us, sErr := s.settings.GetByUserID(ctx, sess.UserID); sErr == nil {
+		downloadPath = safeDownloadPath(us.DownloadPath)
+	}
+	if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath, false); err != nil {
+		return mapEngineAddError(err)
+	}
+	if err := s.sessions.UpdateStatus(ctx, sess.ID, domain.StatusDownloading); err != nil {
+		return err
+	}
+	_ = s.sessions.Touch(ctx, sess.ID)
+	return nil
 }
 
