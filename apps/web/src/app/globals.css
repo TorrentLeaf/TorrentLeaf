@@ -3,7 +3,41 @@
 @tailwind utilities;
 
 @layer base {
+  /* Light palette (default). next-themes stamps `.dark` on <html> to switch to
+     the dark palette below. Radius tokens are shared (same in both), so they
+     live here and the .dark block only overrides colors. */
   :root {
+    --background: 210 40% 98%;
+    --surface: 0 0% 100%;
+    --surface-2: 210 40% 96%;
+    --surface-3: 210 30% 92%;
+    --border: 214 20% 86%;
+    --border-strong: 214 18% 74%;
+
+    --accent: 158 64% 40%;
+    --accent-hover: 158 64% 34%;
+    --accent-muted: 158 50% 88%;
+    --accent-foreground: 0 0% 100%;
+
+    --foreground: 222 30% 12%;
+    --foreground-muted: 222 12% 38%;
+    --foreground-subtle: 222 10% 52%;
+
+    --destructive: 0 72% 48%;
+    --warning: 32 90% 44%;
+    --success: 142 60% 38%;
+    --info: 217 85% 50%;
+
+    /* Data-viz upload accent (violet). */
+    --chart-upload: 262 70% 55%;
+
+    --radius: 0.75rem;
+    --radius-sm: 0.5rem;
+    --radius-xs: 0.375rem;
+  }
+
+  /* Dark palette — TorrentLeaf's original look, moved verbatim from :root. */
+  .dark {
     --background: 222 47% 5%;
     --surface: 222 35% 9%;
     --surface-2: 222 30% 13%;
@@ -25,13 +59,7 @@
     --success: 142 71% 45%;
     --info: 217 91% 60%;
 
-    /* Data-viz upload accent (violet). The only net-new color token — the rest
-       of the palette already lives above. See design tokens.md §1. */
     --chart-upload: 255 92% 76%;
-
-    --radius: 0.75rem;
-    --radius-sm: 0.5rem;
-    --radius-xs: 0.375rem;
   }
 
   * {

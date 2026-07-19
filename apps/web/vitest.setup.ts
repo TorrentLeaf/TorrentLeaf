@@ -34,3 +34,21 @@ Object.defineProperty(globalThis, 'sessionStorage', {
   value: new MemoryStorage(),
   writable: true,
 })
+
+// jsdom does not implement matchMedia; next-themes and any media-query hook
+// read it on mount. Provide a minimal always-false stub.
+if (typeof window !== 'undefined' && !window.matchMedia) {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  })
+}

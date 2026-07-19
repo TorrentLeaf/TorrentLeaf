@@ -31,8 +31,8 @@ export type WTFile = {
 }
 
 type WTClient = {
-  add(uri: string, opts: Record<string, unknown>): WTTorrent | null
-  remove(id: string, cb?: (err?: Error) => void): void
+  add(source: string | Buffer, opts: Record<string, unknown>): WTTorrent | null
+  remove(id: string, opts?: { destroyStore?: boolean }, cb?: (err?: Error) => void): void
   on(event: string, cb: (...args: unknown[]) => void): void
   torrents: WTTorrent[]
 }
@@ -70,21 +70,28 @@ class TorrentEngine {
    * @param downloadPath — optional per-torrent download directory; falls back
    *                       to the global config.downloadPath.
    */
-  add(magnetURI: string, downloadPath?: string): WTTorrent {
-    const existing = this.findByMagnet(magnetURI)
-    if (existing) return existing
+  add(source: string | Buffer, downloadPath?: string): WTTorrent {
+    // Dedup-by-hash is only possible when the source is a magnet string; for a
+    // .torrent Buffer, webtorrent dedups internally and returns the existing
+    // torrent if the infoHash already exists.
+    if (typeof source === 'string') {
+      const existing = this.findByMagnet(source)
+      if (existing) return existing
+    }
 
     const effectivePath = downloadPath ?? config.downloadPath
 
     let torrent: WTTorrent | null = null
     try {
-      torrent = this.client.add(magnetURI, {
+      torrent = this.client.add(source, {
         path: effectivePath,
         maxConns: config.maxConnsPerTorrent,
       })
     } catch (err) {
-      const found = this.findByMagnet(magnetURI)
-      if (found) return found
+      if (typeof source === 'string') {
+        const found = this.findByMagnet(source)
+        if (found) return found
+      }
       throw err
     }
 
@@ -112,7 +119,7 @@ class TorrentEngine {
     return this.client.torrents.find((t) => t.infoHash === infoHash)
   }
 
-  remove(infoHash: string): Promise<void> {
+  remove(infoHash: string, opts: { destroyStore?: boolean } = {}): Promise<void> {
     // Idempotent: removing a torrent the client doesn't have is a no-op.
     // webtorrent's client.remove() throws "No torrent with id <hash>" for
     // unknown hashes — and in 2.x that throw can surface asynchronously,
@@ -124,7 +131,9 @@ class TorrentEngine {
     }
     return new Promise((resolve, reject) => {
       try {
-        this.client.remove(infoHash, (err) => (err ? reject(err) : resolve()))
+        this.client.remove(infoHash, { destroyStore: opts.destroyStore === true }, (err) =>
+          err ? reject(err) : resolve(),
+        )
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)))
       }

@@ -140,7 +140,10 @@ export function MangaReader({ sessionId, fileId, startFile }: MangaReaderProps) 
   // ── Loading / error states ────────────────────────────
   if (pagesQuery.isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-black">
+      <div
+        data-testid="manga-reader-loading"
+        className="flex min-h-screen items-center justify-center bg-black"
+      >
         <div className="space-y-3 w-full max-w-md px-4">
           {[70, 85, 60].map((h, i) => (
             <div

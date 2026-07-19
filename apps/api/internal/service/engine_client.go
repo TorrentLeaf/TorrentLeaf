@@ -7,20 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	neturl "net/url"
 	"time"
 )
 
 // EngineClient talks to the Node.js torrent-engine over HTTP.
 type EngineClient interface {
-	Add(ctx context.Context, magnetURI string, downloadPath string) (EngineTorrentStatus, error)
-	Remove(ctx context.Context, infoHash string) error
+	Add(ctx context.Context, magnetURI string, downloadPath string, reseed bool) (EngineTorrentStatus, error)
+	AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error)
+	Remove(ctx context.Context, infoHash string, destroyStore bool) error
 	SetPriority(ctx context.Context, infoHash string, fileIndex, priority int) error
 	ListArchiveEntries(ctx context.Context, infoHash string, fileIndex int) ([]EngineArchiveEntry, error)
 	// List returns the engine's live state for every active torrent. Used to
 	// overlay real progress/peers/speeds onto the persisted sessions, which
 	// only store zeros for those fields.
 	List(ctx context.Context) ([]EngineTorrentStatus, error)
+	// Health returns nil when the engine answers GET /engine/health with 200.
+	Health(ctx context.Context) error
 }
 
 type EngineTorrentStatus struct {
@@ -43,6 +48,15 @@ type EngineArchiveEntry struct {
 	MimeType string `json:"mimeType"`
 }
 
+// EngineAddError is returned by Add when the engine rejects the request with a
+// machine-readable code (e.g. disk full). Callers map Code to a domain error.
+type EngineAddError struct {
+	Code    string
+	Message string
+}
+
+func (e *EngineAddError) Error() string { return e.Message }
+
 type httpEngineClient struct {
 	baseURL string
 	http    *http.Client
@@ -55,10 +69,13 @@ func NewEngineClient(baseURL string) EngineClient {
 	}
 }
 
-func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPath string) (EngineTorrentStatus, error) {
-	payload := map[string]string{"magnetURI": magnetURI}
+func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPath string, reseed bool) (EngineTorrentStatus, error) {
+	payload := map[string]any{"magnetURI": magnetURI}
 	if downloadPath != "" {
 		payload["downloadPath"] = downloadPath
+	}
+	if reseed {
+		payload["reseed"] = true
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -76,9 +93,77 @@ func (c *httpEngineClient) Add(ctx context.Context, magnetURI string, downloadPa
 
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(resp.Body)
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code != "" {
+			return EngineTorrentStatus{}, &EngineAddError{Code: body.Code, Message: body.Error}
+		}
 		return EngineTorrentStatus{}, fmt.Errorf("engine add returned %d: %s", resp.StatusCode, string(raw))
 	}
 
+	var status EngineTorrentStatus
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
+	}
+	return status, nil
+}
+
+func (c *httpEngineClient) Health(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/engine/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("engine health: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("engine health returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (c *httpEngineClient) AddFile(ctx context.Context, torrentFile []byte, downloadPath string) (EngineTorrentStatus, error) {
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, err := w.CreateFormFile("torrent", "upload.torrent")
+	if err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	if _, err := fw.Write(torrentFile); err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	_ = w.Close()
+
+	url := c.baseURL + "/engine/torrents/file"
+	if downloadPath != "" {
+		url += "?downloadPath=" + neturl.QueryEscape(downloadPath)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &buf)
+	if err != nil {
+		return EngineTorrentStatus{}, err
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return EngineTorrentStatus{}, fmt.Errorf("engine add file: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		raw, _ := io.ReadAll(resp.Body)
+		var body struct {
+			Error string `json:"error"`
+			Code  string `json:"code"`
+		}
+		if json.Unmarshal(raw, &body) == nil && body.Code != "" {
+			return EngineTorrentStatus{}, &EngineAddError{Code: body.Code, Message: body.Error}
+		}
+		return EngineTorrentStatus{}, fmt.Errorf("engine add file returned %d: %s", resp.StatusCode, string(raw))
+	}
 	var status EngineTorrentStatus
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		return EngineTorrentStatus{}, fmt.Errorf("decode engine response: %w", err)
@@ -107,9 +192,12 @@ func (c *httpEngineClient) List(ctx context.Context) ([]EngineTorrentStatus, err
 	return out, nil
 }
 
-func (c *httpEngineClient) Remove(ctx context.Context, infoHash string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-		c.baseURL+"/engine/torrents/"+infoHash, nil)
+func (c *httpEngineClient) Remove(ctx context.Context, infoHash string, destroyStore bool) error {
+	url := c.baseURL + "/engine/torrents/" + infoHash
+	if destroyStore {
+		url += "?destroyStore=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 	if err != nil {
 		return err
 	}

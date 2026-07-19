@@ -33,6 +33,12 @@ type ArchiveLister interface {
 	ListArchiveEntries(ctx context.Context, infoHash string, fileIndex int) ([]EngineArchiveEntry, error)
 }
 
+// SessionEnsurer re-adds an evicted session before a read. Implemented by
+// TorrentService; injected so the reader can recover TTL-evicted torrents.
+type SessionEnsurer interface {
+	EnsureAvailable(ctx context.Context, sessionID uuid.UUID) error
+}
+
 // StreamTarget carries everything the handler needs to build an upstream URL
 // to the torrent-engine. FileType lets the handler pick between /engine/stream
 // (image, pdf, epub) and /engine/archive (cbz).
@@ -60,14 +66,16 @@ type readerService struct {
 	sessions repository.TorrentRepository
 	files    repository.TorrentFileRepository
 	archive  ArchiveLister
+	ensure   SessionEnsurer
 }
 
 func NewReaderService(
 	sessions repository.TorrentRepository,
 	files repository.TorrentFileRepository,
 	archive ArchiveLister,
+	ensure SessionEnsurer,
 ) ReaderService {
-	return &readerService{sessions: sessions, files: files, archive: archive}
+	return &readerService{sessions: sessions, files: files, archive: archive, ensure: ensure}
 }
 
 func (s *readerService) ListPages(ctx context.Context, userID, sessionID, onlyFileID uuid.UUID) ([]Page, error) {
@@ -78,6 +86,12 @@ func (s *readerService) ListPages(ctx context.Context, userID, sessionID, onlyFi
 	if session.UserID != userID {
 		return nil, domain.NewError(domain.ErrNotFound, "torrent session not found", nil)
 	}
+	if s.ensure != nil {
+		if err := s.ensure.EnsureAvailable(ctx, sessionID); err != nil {
+			return nil, err
+		}
+	}
+	_ = s.sessions.Touch(ctx, sessionID)
 
 	files, err := s.files.ListBySession(ctx, sessionID)
 	if err != nil {
@@ -158,6 +172,11 @@ func (s *readerService) ResolveStreamTarget(ctx context.Context, userID, fileID 
 	}
 	if session.UserID != userID {
 		return StreamTarget{}, domain.NewError(domain.ErrNotFound, "file not found", nil)
+	}
+	if s.ensure != nil {
+		if err := s.ensure.EnsureAvailable(ctx, session.ID); err != nil {
+			return StreamTarget{}, err
+		}
 	}
 	return StreamTarget{
 		InfoHash:  session.InfoHash,

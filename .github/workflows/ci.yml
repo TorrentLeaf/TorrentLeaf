@@ -211,7 +211,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps chromium
+        # @playwright/test lives in the web workspace, so exec must be scoped to
+        # it — `pnpm exec` at the repo root can't find the `playwright` binary.
+        run: pnpm --filter web exec playwright install --with-deps chromium
 
       - name: Start services
         run: docker compose -f docker-compose.dev.yml up -d

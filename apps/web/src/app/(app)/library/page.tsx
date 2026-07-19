@@ -1,8 +1,8 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 
 import { fetchLibrary } from '@/lib/library'
 import { listTorrents } from '@/lib/torrents'
@@ -13,14 +13,17 @@ import {
   sessionToDashboard,
   type DashboardFilter,
 } from '@/lib/dashboard'
+import { countByFormat, type LibraryFormat } from '@/lib/library-format'
 import { DashboardShell, type ChartMode } from '@/components/dashboard/dashboard-shell'
 import type { StatCell } from '@/components/dashboard/stats-panel'
 
 const HISTORY_LEN = 60
 const POLL_MS = 2000
 
-export default function LibraryPage() {
+function LibraryContent() {
   const router = useRouter()
+  const search = useSearchParams()
+  const formatParam = search.get('format') as LibraryFormat | null
 
   // Real data: live torrent transfers (polled) + library metadata for type tags.
   const { data: sessions = [], dataUpdatedAt } = useQuery({
@@ -34,10 +37,9 @@ export default function LibraryPage() {
   })
 
   const [filter, setFilter] = useState<DashboardFilter>('overview')
+  const [activeFormat, setActiveFormat] = useState<LibraryFormat | undefined>(formatParam ?? undefined)
   const [activeId, setActiveId] = useState<string>()
   const [chartMode, setChartMode] = useState<ChartMode>('download')
-  const [notifications, setNotifications] = useState(false)
-  const [darkTheme, setDarkTheme] = useState(true)
 
   // Map a session id → library type for the type tag (real, from /library).
   const typeBySession = useMemo(() => {
@@ -46,11 +48,28 @@ export default function LibraryPage() {
     return m
   }, [cards])
 
-  const torrents = useMemo(
+  // Map a session id → derived content format, to filter transfers by format.
+  const formatBySession = useMemo(() => {
+    const m = new Map<string, LibraryFormat>()
+    for (const c of cards) m.set(c.sessionId, c.format)
+    return m
+  }, [cards])
+  const libraryCounts = useMemo(() => countByFormat(cards), [cards])
+
+  const allTorrents = useMemo(
     () => sessions.map((s) => sessionToDashboard(s, typeBySession.get(s.id))),
     [sessions, typeBySession],
   )
-  const counts = useMemo(() => computeCounts(torrents), [torrents])
+  // When a format is active, show only transfers whose shelved item matches it.
+  const torrents = useMemo(
+    () => (activeFormat ? allTorrents.filter((t) => formatBySession.get(t.id) === activeFormat) : allTorrents),
+    [allTorrents, activeFormat, formatBySession],
+  )
+
+  function handleLibraryFormat(f: LibraryFormat) {
+    setActiveFormat((prev) => (prev === f ? undefined : f))
+  }
+  const counts = useMemo(() => computeCounts(allTorrents), [allTorrents])
   const agg = useMemo(() => aggregateTransfer(sessions), [sessions])
 
   // Real transfer-speed history, sampled once per successful poll.
@@ -83,6 +102,9 @@ export default function LibraryPage() {
       counts={counts}
       filter={filter}
       onFilterChange={setFilter}
+      libraryCounts={libraryCounts}
+      activeFormat={activeFormat}
+      onLibraryFormat={handleLibraryFormat}
       activeId={activeId}
       onActiveChange={(id) => {
         setActiveId(id)
@@ -94,13 +116,17 @@ export default function LibraryPage() {
       stats={stats}
       chartMode={chartMode}
       onChartModeChange={setChartMode}
-      notifications={notifications}
-      onNotificationsChange={setNotifications}
-      darkTheme={darkTheme}
-      onDarkThemeChange={setDarkTheme}
       onAdd={() => router.push('/add')}
       onSettings={() => router.push('/settings' as never)}
       hideSeeds
     />
+  )
+}
+
+export default function LibraryPage() {
+  return (
+    <Suspense fallback={null}>
+      <LibraryContent />
+    </Suspense>
   )
 }

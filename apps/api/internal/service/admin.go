@@ -42,7 +42,8 @@ func (s *adminService) PauseTorrent(ctx context.Context, id uuid.UUID) error {
 		return nil // idempotent
 	}
 	// Best-effort engine removal; if the engine is down the status still flips.
-	_ = s.engine.Remove(ctx, session.InfoHash)
+	// Pause keeps the files on disk (destroyStore=false) — the user will resume.
+	_ = s.engine.Remove(ctx, session.InfoHash, false)
 	return s.sessions.UpdateStatus(ctx, id, domain.StatusPaused)
 }
 
@@ -58,7 +59,7 @@ func (s *adminService) ResumeTorrent(ctx context.Context, id uuid.UUID) error {
 			fmt.Sprintf("cannot resume session in status %s", session.Status), nil)
 	}
 	if session.MagnetURI != "" {
-		if _, err := s.engine.Add(ctx, session.MagnetURI, ""); err != nil {
+		if _, err := s.engine.Add(ctx, session.MagnetURI, "", true); err != nil {
 			return fmt.Errorf("engine re-add: %w", err)
 		}
 	}
@@ -71,6 +72,11 @@ func (s *adminService) DeleteTorrent(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	_ = s.engine.Remove(ctx, session.InfoHash)
+	// Wipe files from disk only when this was the last reference to the torrent.
+	destroyStore := false
+	if n, cErr := s.sessions.CountByInfoHash(ctx, session.InfoHash); cErr == nil && n <= 1 {
+		destroyStore = true
+	}
+	_ = s.engine.Remove(ctx, session.InfoHash, destroyStore)
 	return s.sessions.Delete(ctx, id)
 }

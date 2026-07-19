@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,6 +22,7 @@ type torrentService struct {
 	library  repository.LibraryRepository
 	settings repository.SettingsRepository
 	engine   EngineClient
+	sleepFn  func(time.Duration)
 }
 
 func NewTorrentService(
@@ -30,13 +32,44 @@ func NewTorrentService(
 	settings repository.SettingsRepository,
 	engine EngineClient,
 ) TorrentService {
-	return &torrentService{sessions: sessions, files: files, library: library, settings: settings, engine: engine}
+	return &torrentService{sessions: sessions, files: files, library: library, settings: settings, engine: engine, sleepFn: time.Sleep}
 }
 
 // maxMagnetURILength bounds the magnet URI an API client may submit. The
 // BitTorrent spec has no hard cap but real-world magnets rarely exceed 1 KB;
 // the ceiling blocks trivial request-bloat DoS without rejecting legit links.
 const maxMagnetURILength = 2048
+
+// mapEngineAddError translates an engine add failure into a domain error.
+// A machine-readable EngineAddError (disk full, invalid magnet, etc.) is
+// surfaced with the real reason; any other error is a transport/unknown
+// failure and is hidden behind a generic "unavailable" so internal details
+// (engine URLs, connection strings) never leak into the API response.
+func mapEngineAddError(err error) error {
+	var ae *EngineAddError
+	if errors.As(err, &ae) {
+		switch ae.Code {
+		case "insufficient_disk", "disk_budget":
+			return domain.NewError(domain.ErrInsufficientStorage, ae.Message, err)
+		case "max_torrents":
+			return domain.NewError(domain.ErrUnavailable, ae.Message, err)
+		case "invalid_magnet", "invalid_path", "invalid_upload":
+			return domain.NewError(domain.ErrInvalidInput, ae.Message, err)
+		}
+	}
+	return domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
+}
+
+// safeDownloadPath returns the user's stored download path only if it is a
+// valid relative subfolder; legacy/invalid values (e.g. the old absolute
+// "/data/torrents" default) fall back to "" so the engine uses its default
+// instead of rejecting the add with invalid_path.
+func safeDownloadPath(p string) string {
+	if validDownloadSubpath(p) {
+		return strings.TrimSpace(p)
+	}
+	return ""
+}
 
 func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error) {
 	magnetURI = strings.TrimSpace(magnetURI)
@@ -76,36 +109,87 @@ func (s *torrentService) Add(ctx context.Context, userID uuid.UUID, magnetURI st
 	// engine default if settings lookup fails).
 	downloadPath := ""
 	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
-		downloadPath = userSettings.DownloadPath
+		downloadPath = safeDownloadPath(userSettings.DownloadPath)
 	}
 
-	if _, err := s.engine.Add(ctx, magnetURI, downloadPath); err != nil {
+	if _, err := s.engine.Add(ctx, magnetURI, downloadPath, false); err != nil {
 		_ = s.sessions.Delete(ctx, session.ID)
-		return nil, domain.NewError(domain.ErrUnavailable, "torrent engine unavailable", err)
+		return nil, mapEngineAddError(err)
 	}
 
-	// Auto-shelf: create a library row with the infoHash as placeholder title.
-	// The real name lands via ApplyMetadata once the swarm delivers metadata.
-	// Conflicts (user re-added the same torrent) are swallowed — idempotency.
-	// Gated by the user's autoAddLibrary setting; users who turn it off keep
-	// torrents in the swarm without having them appear on the library grid.
+	if err := s.autoShelf(ctx, userID, session); err != nil {
+		return nil, err
+	}
+	_ = s.sessions.Touch(ctx, session.ID)
+	return session, nil
+}
+
+// autoShelf creates a library row for the session (title = infoHash placeholder;
+// the real name lands via ApplyMetadata once metadata arrives). Gated by the
+// user's autoAddLibrary setting. Conflicts are swallowed (idempotency).
+func (s *torrentService) autoShelf(ctx context.Context, userID uuid.UUID, session *domain.TorrentSession) error {
 	autoAdd := true
 	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
 		autoAdd = userSettings.AutoAddLibrary
 	}
-	if autoAdd {
-		if _, err := s.library.Create(ctx, domain.LibraryItem{
-			UserID:    userID,
-			SessionID: session.ID,
-			Title:     session.InfoHash,
-			Type:      domain.LibraryTypeOther,
-		}); err != nil {
-			if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
-				return nil, err
-			}
+	if !autoAdd {
+		return nil
+	}
+	if _, err := s.library.Create(ctx, domain.LibraryItem{
+		UserID:    userID,
+		SessionID: session.ID,
+		Title:     session.InfoHash,
+		Type:      domain.LibraryTypeOther,
+	}); err != nil {
+		if de := (*domain.Error)(nil); !errors.As(err, &de) || de.Code != domain.ErrConflict {
+			return err
 		}
 	}
+	return nil
+}
 
+// AddFromFile adds a torrent from a raw .torrent file. The infoHash/name come
+// from the engine's parse of the file (the engine derives the hash), then the
+// session is created just like the magnet flow (idempotent per user).
+func (s *torrentService) AddFromFile(ctx context.Context, userID uuid.UUID, torrentFile []byte) (*domain.TorrentSession, error) {
+	if len(torrentFile) == 0 {
+		return nil, domain.NewError(domain.ErrInvalidInput, "empty torrent file", nil)
+	}
+
+	downloadPath := ""
+	if userSettings, err := s.settings.GetByUserID(ctx, userID); err == nil {
+		downloadPath = safeDownloadPath(userSettings.DownloadPath)
+	}
+
+	status, err := s.engine.AddFile(ctx, torrentFile, downloadPath)
+	if err != nil {
+		return nil, mapEngineAddError(err)
+	}
+	infoHash := strings.ToLower(status.InfoHash)
+	if infoHash == "" {
+		return nil, domain.NewError(domain.ErrUnavailable, "torrent metadata not available yet", nil)
+	}
+
+	// Idempotent per user: reuse an existing session for this hash.
+	if existing, err := s.sessions.GetByUserAndInfoHash(ctx, userID, infoHash); err == nil {
+		return existing, nil
+	} else if !isNotFound(err) {
+		return nil, err
+	}
+
+	session, err := s.sessions.Create(ctx, domain.TorrentSession{
+		UserID:    userID,
+		InfoHash:  infoHash,
+		MagnetURI: "magnet:?xt=urn:btih:" + infoHash,
+		Status:    domain.StatusFetchingMetadata,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.autoShelf(ctx, userID, session); err != nil {
+		return nil, err
+	}
 	return session, nil
 }
 
@@ -178,7 +262,13 @@ func (s *torrentService) Delete(ctx context.Context, userID, id uuid.UUID) error
 	if session.UserID != userID {
 		return domain.NewError(domain.ErrNotFound, "torrent session not found", nil)
 	}
-	if err := s.engine.Remove(ctx, session.InfoHash); err != nil {
+	// Only wipe files from disk when this is the last session pointing at the
+	// torrent — other users may still be reading the same info_hash.
+	destroyStore := false
+	if n, cErr := s.sessions.CountByInfoHash(ctx, session.InfoHash); cErr == nil && n <= 1 {
+		destroyStore = true
+	}
+	if err := s.engine.Remove(ctx, session.InfoHash, destroyStore); err != nil {
 		// Engine-level removal is best-effort — proceed with DB cleanup.
 		_ = err
 	}
@@ -362,7 +452,8 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 		return fmt.Errorf("reseed: list sessions: %w", err)
 	}
 
-	var added, skipped, failed int
+	var added, skipped int
+	var failures []string
 	for _, sess := range sessions {
 		// Only re-add torrents that were actively downloading/seeding.
 		if sess.Status == domain.StatusPaused || sess.MagnetURI == "" {
@@ -373,20 +464,146 @@ func (s *torrentService) ReseedEngine(ctx context.Context) error {
 		// Fetch the user's download path (best-effort; use default on error).
 		downloadPath := ""
 		if userSettings, settErr := s.settings.GetByUserID(ctx, sess.UserID); settErr == nil {
-			downloadPath = userSettings.DownloadPath
+			downloadPath = safeDownloadPath(userSettings.DownloadPath)
 		}
 
-		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath); err != nil {
-			failed++
+		if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath, true); err != nil {
+			// Record which torrent failed and why (engine code when available)
+			// so the aggregate log is legible instead of an opaque "failed N/M".
+			reason := "engine unavailable"
+			var ae *EngineAddError
+			if errors.As(err, &ae) {
+				reason = ae.Code
+			}
+			failures = append(failures, fmt.Sprintf("%s(%s)", sess.InfoHash, reason))
 			continue
 		}
 		added++
 	}
 
-	if failed > 0 {
-		return fmt.Errorf("reseed: added %d, skipped %d, failed %d/%d",
-			added, skipped, failed, len(sessions))
+	if len(failures) > 0 {
+		return fmt.Errorf("reseed: added %d, skipped %d, failed %d/%d: %s",
+			added, skipped, len(failures), len(sessions), strings.Join(failures, ", "))
 	}
+	return nil
+}
+
+// ReseedEngineWithRetry waits for the engine to become healthy, then reseeds.
+// The engine holds torrent state only in RAM, so at API startup it may not be
+// ready yet (startup race). We poll /engine/health with bounded exponential
+// backoff, then run a single reseed pass once healthy. Per-torrent add errors
+// are surfaced by ReseedEngine and do not trigger another health loop.
+func (s *torrentService) ReseedEngineWithRetry(ctx context.Context) error {
+	const maxAttempts = 6
+	const maxBackoff = 30 * time.Second
+	backoff := time.Second
+
+	for attempt := 1; ; attempt++ {
+		if err := s.engine.Health(ctx); err == nil {
+			return s.ReseedEngine(ctx)
+		} else if attempt >= maxAttempts {
+			return fmt.Errorf("reseed: engine not healthy after %d attempts: %w", attempt, err)
+		}
+		s.sleepFn(backoff)
+		if backoff < maxBackoff {
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
+	}
+}
+
+// EvictStale frees disk for torrents idle past ttl. The session and reading
+// progress are preserved (status→evicted, downloaded_bytes→0); reading re-adds
+// via EnsureAvailable. destroyStore only fires when no session outside the
+// stale set still references the info_hash.
+func (s *torrentService) EvictStale(ctx context.Context, ttl time.Duration) (int, error) {
+	cutoff := time.Now().Add(-ttl)
+	stale, err := s.sessions.ListStale(ctx, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("evict: list stale: %w", err)
+	}
+
+	// Group by info_hash: every session sharing a hash points at the same files
+	// on disk, so the engine removal (and the destroyStore decision) must be
+	// made once per hash. Removing per-session would take the torrent out of the
+	// engine on the first Remove, making every later destroyStore Remove a no-op
+	// and leaking the files.
+	byHash := make(map[string][]domain.TorrentSession)
+	for i := range stale {
+		byHash[stale[i].InfoHash] = append(byHash[stale[i].InfoHash], stale[i])
+	}
+
+	evicted := 0
+	for infoHash, group := range byHash {
+		// destroyStore only when no session outside this stale group still
+		// references the hash. CountActiveByInfoHash counts non-evicted sessions
+		// other than the excluded one; the remaining len(group)-1 stale sessions
+		// are still non-evicted here, so subtract them to get outside references.
+		destroyStore := false
+		if n, cErr := s.sessions.CountActiveByInfoHash(ctx, infoHash, group[0].ID); cErr == nil {
+			destroyStore = n-(len(group)-1) <= 0
+		}
+
+		// Mark every session evicted BEFORE removing from the engine: wiping
+		// files while a referencing session still reads as downloading would
+		// leave it unrecoverable (EnsureAvailable only re-adds an evicted
+		// session).
+		allMarked := true
+		for i := range group {
+			if err := s.sessions.MarkEvicted(ctx, group[i].ID); err != nil {
+				allMarked = false
+			}
+		}
+		// Partial mark → skip the engine entirely: removing the torrent (even
+		// without destroyStore) would strand the session we couldn't evict, and
+		// EnsureAvailable won't re-add a session that still reads as downloading.
+		// The next cycle retries; sessions we did evict recover on read.
+		if !allMarked {
+			continue
+		}
+
+		// Free the disk. If the engine call fails, the data wasn't actually freed
+		// and the torrent is still running, so roll the sessions back to their
+		// prior status — an evicted session is never stale-listed again, so
+		// reporting it evicted here would leak the disk with no retry. (The
+		// rolled-back downloaded_bytes stays 0 until the next engine overlay
+		// refresh; that field is display-only.)
+		if err := s.engine.Remove(ctx, infoHash, destroyStore); err != nil {
+			for i := range group {
+				_ = s.sessions.UpdateStatus(ctx, group[i].ID, group[i].Status)
+			}
+			continue
+		}
+		evicted += len(group)
+	}
+	return evicted, nil
+}
+
+// EnsureAvailable re-adds an evicted session's torrent to the engine so a read
+// can proceed. No-op for any non-evicted status. reseed=false because the data
+// was destroyed on eviction — this is a genuine re-download and must respect
+// the disk floor (which eviction just freed).
+func (s *torrentService) EnsureAvailable(ctx context.Context, sessionID uuid.UUID) error {
+	sess, err := s.sessions.GetByID(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Status != domain.StatusEvicted {
+		return nil
+	}
+	downloadPath := ""
+	if us, sErr := s.settings.GetByUserID(ctx, sess.UserID); sErr == nil {
+		downloadPath = safeDownloadPath(us.DownloadPath)
+	}
+	if _, err := s.engine.Add(ctx, sess.MagnetURI, downloadPath, false); err != nil {
+		return mapEngineAddError(err)
+	}
+	if err := s.sessions.UpdateStatus(ctx, sess.ID, domain.StatusDownloading); err != nil {
+		return err
+	}
+	_ = s.sessions.Touch(ctx, sess.ID)
 	return nil
 }
 

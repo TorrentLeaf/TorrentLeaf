@@ -2,6 +2,7 @@ package handler
 
 import (
 	"errors"
+	"io"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -99,6 +100,34 @@ func (h *TorrentHandler) Add(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusCreated).JSON(toSessionDTO(session))
 }
 
+func (h *TorrentHandler) AddFile(c *fiber.Ctx) error {
+	userID, ok := middleware.UserID(c)
+	if !ok {
+		return fiber.ErrUnauthorized
+	}
+	fh, err := c.FormFile("torrent")
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "missing torrent file")
+	}
+	if fh.Size > 10*1024*1024 {
+		return fiber.NewError(fiber.StatusRequestEntityTooLarge, "torrent file too large")
+	}
+	f, err := fh.Open()
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "cannot read upload")
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, 10*1024*1024))
+	if err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "cannot read upload")
+	}
+	session, err := h.svc.AddFromFile(c.Context(), userID, data)
+	if err != nil {
+		return mapTorrentError(err)
+	}
+	return c.Status(fiber.StatusCreated).JSON(toSessionDTO(session))
+}
+
 func (h *TorrentHandler) List(c *fiber.Ctx) error {
 	userID, ok := middleware.UserID(c)
 	if !ok {
@@ -179,6 +208,8 @@ func mapTorrentError(err error) error {
 		return fiber.NewError(fiber.StatusConflict, de.Message)
 	case domain.ErrUnavailable:
 		return fiber.NewError(fiber.StatusServiceUnavailable, de.Message)
+	case domain.ErrInsufficientStorage:
+		return fiber.NewError(fiber.StatusInsufficientStorage, de.Message)
 	case domain.ErrForbidden:
 		return fiber.NewError(fiber.StatusForbidden, de.Message)
 	case domain.ErrUnauthorized:

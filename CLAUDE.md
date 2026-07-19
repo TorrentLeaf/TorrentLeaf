@@ -265,7 +265,8 @@ async function streamFileChunk(torrentId: string, fileIndex: number, range: Rang
 - `<PageTurnAnimation>` — animação de virar página (opcional)
 
 ### Regras Visuais
-- Dark mode como PADRÃO e único modo (por ora)
+- Dark mode é o PADRÃO; light theme suportado via next-themes (toggle na sidebar).
+  Superfícies imersivas (readers, video player) permanecem escuras por design.
 - Radius: `--radius: 0.75rem` para cards, `0.5rem` para inputs, `0.375rem` para badges
 - Sombras sutis: `shadow-sm` é o máximo para elementos flat
 - Transições: `transition-all duration-200` padrão, `duration-300` para modais
@@ -373,6 +374,7 @@ type LibraryItem = {
 ### Rotas da API Go
 ```
 POST   /api/v1/torrents              → Adicionar magnet/torrent
+POST   /api/v1/torrents/file         → Adicionar via upload de .torrent (multipart, campo "torrent")
 GET    /api/v1/torrents              → Listar torrents do usuário
 GET    /api/v1/torrents/:id          → Detalhes + lista de arquivos
 DELETE /api/v1/torrents/:id          → Remover torrent
@@ -415,6 +417,7 @@ setar headers customizados.
 ### Rotas do Torrent Engine (interno)
 ```
 POST   /engine/torrents              → Adicionar torrent (aceita downloadPath)
+POST   /engine/torrents/file         → Adicionar via upload de .torrent (multipart, campo "torrent")
 DELETE /engine/torrents/:infoHash    → Remover
 GET    /engine/torrents              → Listar todos os torrents ativos
 GET    /engine/torrents/:infoHash    → Status + files
@@ -696,6 +699,7 @@ Setup: `cd tools/mcp-torrentleaf && npm install && npm run build`
 
 ### ADRs (`docs/adr/`)
 - `001` Por que Go no backend | `002` Por que webtorrent-hybrid | `003` Por que sqlc
+- `004` Leitura de CBZ | `005` EPUB reader via CFI | `006` Download path via bind-mount (subpath-only)
 - Criar novo ADR para qualquer decisão arquitetural relevante
 
 ### AGENTS.md (raiz)
@@ -756,3 +760,24 @@ engine.
 todos os torrents `downloading`/`seeding` ao engine quando a API sobe. Isso
 recupera de restarts do engine (state em memória, perde tudo). Hidratar é
 best-effort — peers velhos podem nunca voltar.
+
+### Finalization (branch `finalization`) — features adicionadas
+- **Erros de add transparentes:** engine lança `AddTorrentError{code}`
+  (`insufficient_disk`/`disk_budget`/`max_torrents`/`invalid_magnet`/`invalid_path`);
+  API mapeia para HTTP correto (disco cheio → 507, não mais 503 genérico) via
+  `EngineAddError` + `mapEngineAddError`; a UI mostra a mensagem real no toast.
+- **Upload de `.torrent`:** `POST /api/v1/torrents/file` (multipart) →
+  `POST /engine/torrents/file`. Componente `<TorrentFileInput>` na página `/add`.
+- **Download path por usuário:** bind-mount `TORRENTLEAF_DATA_DIR` (ver ADR 006);
+  `resolveDownloadPath` (engine) e `validDownloadSubpath` (API) garantem subpasta
+  segura (rejeitam `/` absoluto e `..`).
+- **Magnet protocol handler:** `<RegisterMagnetHandler>` chama
+  `navigator.registerProtocolHandler('magnet', '/add?magnet=%s')`; `/add` lê
+  `?magnet=` e pré-preenche (sem auto-submit — consentimento explícito).
+- **Sidebar Library = filtros de formato reais:** API deriva `format`
+  (`comics|books|pdfs|video|other`) do file_type dominante da sessão
+  (`formatFromFileType`); a sidebar mostra contagens ao vivo e filtra `/library`.
+- **Light theme real:** `next-themes` (`ThemeProvider attribute="class"`,
+  default `dark`); tokens CSS divididos em `:root` (light) + `.dark`. Toggle
+  `<ThemeToggle>` na sidebar. Readers e video player permanecem escuros por design.
+- **Removido:** toggle decorativo de Notifications da sidebar.

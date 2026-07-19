@@ -21,6 +21,9 @@ type fakeTorrentRepo struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*domain.TorrentSession
 	byHash   map[string]*domain.TorrentSession
+	// markEvictedFail forces MarkEvicted to error for these ids (tests the
+	// evict path where a session can't be flagged evicted).
+	markEvictedFail map[uuid.UUID]bool
 }
 
 func newFakeTorrentRepo() *fakeTorrentRepo {
@@ -143,6 +146,67 @@ func (r *fakeTorrentRepo) Delete(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (r *fakeTorrentRepo) CountByInfoHash(_ context.Context, infoHash string) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sessions {
+		if s.InfoHash == infoHash {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (r *fakeTorrentRepo) Touch(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.sessions[id]; ok {
+		s.LastTouchedAt = time.Now()
+	}
+	return nil
+}
+
+func (r *fakeTorrentRepo) ListStale(_ context.Context, cutoff time.Time) ([]domain.TorrentSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.TorrentSession
+	for _, s := range r.sessions {
+		if (s.Status == domain.StatusDownloading || s.Status == domain.StatusSeeding) &&
+			s.LastTouchedAt.Before(cutoff) {
+			out = append(out, *s)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeTorrentRepo) MarkEvicted(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.markEvictedFail[id] {
+		return domain.NewError(domain.ErrUnavailable, "mark evicted failed", nil)
+	}
+	s, ok := r.sessions[id]
+	if !ok {
+		return domain.NewError(domain.ErrNotFound, "not found", nil)
+	}
+	s.Status = domain.StatusEvicted
+	s.DownloadedBytes = 0
+	return nil
+}
+
+func (r *fakeTorrentRepo) CountActiveByInfoHash(_ context.Context, infoHash string, excludeID uuid.UUID) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sessions {
+		if s.InfoHash == infoHash && s.Status != domain.StatusEvicted && s.ID != excludeID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 type fakeFileRepo struct {
 	mu    sync.Mutex
 	files map[uuid.UUID][]domain.TorrentFile
@@ -230,6 +294,7 @@ func (r *fakeSettingsRepo) Upsert(_ context.Context, s domain.UserSettings) (*do
 type fakeEngine struct {
 	addErr      error
 	addCalls    []string
+	addReseeds  []bool
 	removeCalls []string
 	priorityCalls []struct {
 		Hash        string
@@ -238,18 +303,36 @@ type fakeEngine struct {
 	archiveEntries map[string][]EngineArchiveEntry // keyed by "hash:fileIdx"
 	archiveErr     error
 	liveList       []EngineTorrentStatus
+	healthErrs     []error
+	healthCalls    int
+	removeDestroy  map[string]bool
+	removeErr      error
 }
 
-func (e *fakeEngine) Add(_ context.Context, magnet string, _ string) (EngineTorrentStatus, error) {
+func (e *fakeEngine) Add(_ context.Context, magnet string, _ string, reseed bool) (EngineTorrentStatus, error) {
 	e.addCalls = append(e.addCalls, magnet)
+	e.addReseeds = append(e.addReseeds, reseed)
 	if e.addErr != nil {
 		return EngineTorrentStatus{}, e.addErr
 	}
 	return EngineTorrentStatus{InfoHash: "deadbeef", Ready: false}, nil
 }
 
-func (e *fakeEngine) Remove(_ context.Context, hash string) error {
+func (e *fakeEngine) AddFile(_ context.Context, _ []byte, _ string) (EngineTorrentStatus, error) {
+	if e.addErr != nil {
+		return EngineTorrentStatus{}, e.addErr
+	}
+	return EngineTorrentStatus{InfoHash: "0123456789abcdef0123456789abcdef01234567", Name: "sample", Ready: false}, nil
+}
+
+func (e *fakeEngine) Remove(_ context.Context, hash string, destroyStore bool) error {
+	if e.removeErr != nil {
+		return e.removeErr
+	}
 	e.removeCalls = append(e.removeCalls, hash)
+	if e.removeDestroy != nil {
+		e.removeDestroy[hash] = destroyStore
+	}
 	return nil
 }
 
@@ -263,6 +346,15 @@ func (e *fakeEngine) SetPriority(_ context.Context, hash string, idx, prio int) 
 
 func (e *fakeEngine) List(_ context.Context) ([]EngineTorrentStatus, error) {
 	return e.liveList, nil
+}
+
+func (e *fakeEngine) Health(_ context.Context) error {
+	i := e.healthCalls
+	e.healthCalls++
+	if i < len(e.healthErrs) {
+		return e.healthErrs[i]
+	}
+	return nil
 }
 
 func (e *fakeEngine) ListArchiveEntries(_ context.Context, hash string, fileIdx int) ([]EngineArchiveEntry, error) {
@@ -554,6 +646,43 @@ func TestListReturnsOnlyCallerSessions(t *testing.T) {
 	}
 	if sessions[0].UserID != owner {
 		t.Errorf("list leaked cross-user session: %s", sessions[0].UserID)
+	}
+}
+
+func TestDelete_DestroysStoreOnlyOnLastReference(t *testing.T) {
+	ctx := context.Background()
+
+	// Last reference → destroyStore true.
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	uid := uuid.New()
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uid, InfoHash: "hashA", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	if err := svc.Delete(ctx, uid, s.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if !e.removeDestroy["hashA"] {
+		t.Fatal("last reference should destroy the store")
+	}
+
+	// Two references → destroyStore false for the first delete.
+	svc2, sr2, _, e2 := newTestTorrentSvc()
+	e2.removeDestroy = map[string]bool{}
+	u1, u2 := uuid.New(), uuid.New()
+	s1, _ := sr2.Create(ctx, domain.TorrentSession{
+		UserID: u1, InfoHash: "hashB", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	if _, err := sr2.Create(ctx, domain.TorrentSession{
+		UserID: u2, InfoHash: "hashB", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc2.Delete(ctx, u1, s1.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if e2.removeDestroy["hashB"] {
+		t.Fatal("another session still references the hash — must NOT destroy the store")
 	}
 }
 

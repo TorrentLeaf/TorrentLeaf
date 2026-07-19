@@ -10,13 +10,15 @@ const MAGNET_RE = /^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}/
 export interface MagnetInputProps {
   onSubmit: (magnetURI: string) => Promise<void> | void
   placeholder?: string
+  defaultValue?: string
 }
 
 export function MagnetInput({
   onSubmit,
   placeholder = 'magnet:?xt=urn:btih:...',
+  defaultValue,
 }: MagnetInputProps) {
-  const [value, setValue] = useState('')
+  const [value, setValue] = useState(defaultValue ?? '')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 

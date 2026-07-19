@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,10 +26,16 @@ type Config struct {
 	MinioSecretKey     string
 	APIWebhookSecret   string
 	CORSAllowedOrigins string
+	TorrentTTLHours    int
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
+
+	ttlHours, err := parseNonNegativeInt("TORRENT_TTL_HOURS", 72)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{
 		Env:              getenv("ENV", "development"),
@@ -46,6 +53,7 @@ func Load() (*Config, error) {
 		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
 		APIWebhookSecret:   os.Getenv("API_WEBHOOK_SECRET"),
 		CORSAllowedOrigins: os.Getenv("CORS_ALLOWED_ORIGINS"),
+		TorrentTTLHours:    ttlHours,
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -100,4 +108,21 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseNonNegativeInt reads a non-negative integer env var. An unset/empty value
+// uses the fallback; an explicitly-set value that is not a non-negative integer
+// is a hard error. Silently defaulting would leave a feature like TTL eviction
+// running when the operator meant to disable it — deleting data they believed
+// was safe. Whitespace is trimmed so "0 " still disables cleanly.
+func parseNonNegativeInt(key string, fallback int) (int, error) {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("config: %s must be a non-negative integer (got %q); use 0 to disable", key, v)
+	}
+	return n, nil
 }

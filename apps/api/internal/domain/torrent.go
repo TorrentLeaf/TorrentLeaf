@@ -14,6 +14,7 @@ const (
 	StatusSeeding          TorrentStatus = "seeding"
 	StatusPaused           TorrentStatus = "paused"
 	StatusError            TorrentStatus = "error"
+	StatusEvicted          TorrentStatus = "evicted"
 )
 
 type FileType string
@@ -43,6 +44,7 @@ type TorrentSession struct {
 	Files           []TorrentFile
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	LastTouchedAt   time.Time `json:"lastTouchedAt"`
 }
 
 type TorrentFile struct {

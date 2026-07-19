@@ -87,6 +87,13 @@ async function installMockApi(
           body: JSON.stringify({ error: 'archive not ready' }),
         })
       }
+      // Hold the retry briefly so the loading/not-ready state is reliably
+      // observable before pages materialize. Without this the 503→200 flip is
+      // instant and the transient copy can flash faster than the assertion polls
+      // on a cold CI render (Next compiles the route on first navigation in dev).
+      if (opts.archiveNotReadyFirst) {
+        await new Promise((resolve) => setTimeout(resolve, 600))
+      }
       return route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -176,10 +183,10 @@ test.describe('CBZ reading flow', () => {
 
     await page.goto(`/read/manga/${SESSION_ID}?fileId=${CBZ_FILE_ID}`)
 
-    // Loading or "not ready" copy shows briefly.
-    await expect(
-      page.getByText(/Archive not ready|Loading/i).first(),
-    ).toBeVisible({ timeout: 5_000 })
+    // While the 503 is retried, the reader shows its loading skeleton (React
+    // Query keeps the query pending across retries, so isError never flips —
+    // the skeleton, not the "waiting for pieces" copy, is what renders here).
+    await expect(page.getByTestId('manga-reader-loading')).toBeVisible({ timeout: 15_000 })
 
     // Retry lands, pages materialize, page counter shows "1 / 2".
     await expect(page.getByText('1 / 2')).toBeVisible({ timeout: 15_000 })

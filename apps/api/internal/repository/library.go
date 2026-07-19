@@ -25,6 +25,9 @@ type LibraryItemWithMeta struct {
 	LastReadPage  *int
 	LastReadTotal *int
 	LastReadAt    *time.Time
+	// DominantFileType is the most common torrent_files.file_type across the
+	// session, used to derive the card's content format. Defaults to "unknown".
+	DominantFileType string
 }
 
 type LibraryRepository interface {

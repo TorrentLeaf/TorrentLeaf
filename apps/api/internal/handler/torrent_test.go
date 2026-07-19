@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -26,6 +29,7 @@ type fakeTorrentService struct {
 	deleteFn        func(context.Context, uuid.UUID, uuid.UUID) error
 	setPriorityFn   func(context.Context, uuid.UUID, uuid.UUID, int, int) error
 	applyMetadataFn func(context.Context, string, string, int64, []service.MetadataFile) error
+	addFromFileFn   func(context.Context, uuid.UUID, []byte) (*domain.TorrentSession, error)
 }
 
 func (f *fakeTorrentService) Add(ctx context.Context, u uuid.UUID, m string) (*domain.TorrentSession, error) {
@@ -70,7 +74,26 @@ func (f *fakeTorrentService) ApplyMetadata(ctx context.Context, h, n string, tot
 	return nil
 }
 
+func (f *fakeTorrentService) AddFromFile(ctx context.Context, u uuid.UUID, data []byte) (*domain.TorrentSession, error) {
+	if f.addFromFileFn != nil {
+		return f.addFromFileFn(ctx, u, data)
+	}
+	return nil, errors.New("AddFromFile not implemented")
+}
+
 func (f *fakeTorrentService) ReseedEngine(_ context.Context) error {
+	return nil
+}
+
+func (f *fakeTorrentService) ReseedEngineWithRetry(_ context.Context) error {
+	return nil
+}
+
+func (f *fakeTorrentService) EvictStale(_ context.Context, _ time.Duration) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeTorrentService) EnsureAvailable(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
@@ -215,5 +238,68 @@ func TestProtectedEndpointWithoutTokenReturns401(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != fiber.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// TestAddFileCreatesSession — a multipart .torrent upload reaches the service
+// as raw bytes and the created session is returned as 201.
+func TestAddFileCreatesSession(t *testing.T) {
+	userID := uuid.New()
+	sessionID := uuid.New()
+	var gotBytes []byte
+	svc := &fakeTorrentService{
+		addFromFileFn: func(_ context.Context, u uuid.UUID, data []byte) (*domain.TorrentSession, error) {
+			if u != userID {
+				t.Errorf("user not propagated: got %s", u)
+			}
+			gotBytes = data
+			return &domain.TorrentSession{ID: sessionID, UserID: u, InfoHash: "045fe5d7843f9fd2567315108a2667893c9dc276", Name: "sample.txt"}, nil
+		},
+	}
+	h := NewTorrentHandler(zerolog.Nop(), svc)
+	app := newTestApp()
+	app.Post("/api/v1/torrents/file", injectUser(userID), h.AddFile)
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	fw, _ := w.CreateFormFile("torrent", "sample.torrent")
+	_, _ = fw.Write([]byte("d4:infoe")) // bencoded-ish payload; service is faked
+	_ = w.Close()
+
+	req := httptest.NewRequest("POST", "/api/v1/torrents/file", &buf)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != fiber.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201, got %d body=%s", resp.StatusCode, raw)
+	}
+	if len(gotBytes) == 0 {
+		t.Fatal("torrent bytes not forwarded to service")
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(raw), sessionID.String()) {
+		t.Fatalf("response should carry the session id, got %s", raw)
+	}
+}
+
+// TestAddFileMissingFileReturns400 — no file part → 400.
+func TestAddFileMissingFileReturns400(t *testing.T) {
+	h := NewTorrentHandler(zerolog.Nop(), &fakeTorrentService{})
+	app := newTestApp()
+	app.Post("/api/v1/torrents/file", injectUser(uuid.New()), h.AddFile)
+
+	req := httptest.NewRequest("POST", "/api/v1/torrents/file", strings.NewReader(""))
+	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != fiber.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
 	}
 }

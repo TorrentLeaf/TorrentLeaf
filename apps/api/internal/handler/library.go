@@ -27,6 +27,7 @@ type libraryCardDTO struct {
 	Title       string  `json:"title"`
 	CoverURL    string  `json:"coverUrl,omitempty"`
 	Type        string  `json:"type"`
+	Format      string  `json:"format"`
 	AddedAt     string  `json:"addedAt"`
 	IsFavorite  bool    `json:"isFavorite"`
 	CurrentPage int     `json:"currentPage"`
@@ -135,6 +136,7 @@ func toLibraryCardDTO(c service.LibraryCard) libraryCardDTO {
 		Title:       c.Title,
 		CoverURL:    c.CoverURL,
 		Type:        string(c.Type),
+		Format:      c.Format,
 		AddedAt:     c.AddedAt.UTC().Format(time.RFC3339),
 		IsFavorite:  c.IsFavorite,
 		CurrentPage: c.CurrentPage,

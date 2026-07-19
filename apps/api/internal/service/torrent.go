@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -10,6 +11,8 @@ import (
 
 type TorrentService interface {
 	Add(ctx context.Context, userID uuid.UUID, magnetURI string) (*domain.TorrentSession, error)
+	// AddFromFile adds a torrent from raw .torrent file bytes.
+	AddFromFile(ctx context.Context, userID uuid.UUID, torrentFile []byte) (*domain.TorrentSession, error)
 	List(ctx context.Context, userID uuid.UUID) ([]domain.TorrentSession, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (*domain.TorrentSession, error)
 	Delete(ctx context.Context, userID, id uuid.UUID) error
@@ -24,6 +27,15 @@ type TorrentService interface {
 	// to the engine. Called at API startup so that readers and streaming
 	// continue to work after an engine restart.
 	ReseedEngine(ctx context.Context) error
+
+	// ReseedEngineWithRetry waits for engine health then reseeds (startup use).
+	ReseedEngineWithRetry(ctx context.Context) error
+
+	// EvictStale removes disk data for sessions idle past ttl, preserving the
+	// session (status→evicted). Returns how many were evicted.
+	EvictStale(ctx context.Context, ttl time.Duration) (int, error)
+	// EnsureAvailable re-adds an evicted session to the engine before a read.
+	EnsureAvailable(ctx context.Context, sessionID uuid.UUID) error
 }
 
 type MetadataFile struct {

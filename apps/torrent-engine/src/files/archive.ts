@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { existsSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { spawn } from 'node:child_process'
 import yauzl, { type Entry, type ZipFile } from 'yauzl'
 import { createExtractorFromData } from 'node-unrar-js'
@@ -25,7 +25,22 @@ class WTFileReader extends yauzl.RandomAccessReader {
   }
   _readStreamForRange(start: number, end: number): Readable {
     // yauzl passes `end` exclusive; WTFile.createReadStream expects inclusive.
-    return this.file.createReadStream({ start, end: end - 1 }) as Readable
+    const src = this.file.createReadStream({ start, end: end - 1 }) as Readable
+    // WebTorrent's stream comes from the userland `readable-stream` package and
+    // lacks `unpipe()`. yauzl calls `stream.unpipe()` when tearing down the
+    // source it piped through its inflate filter — i.e. for DEFLATE-compressed
+    // ZIP entries only (STORED entries never hit that path). That threw
+    // `TypeError: stream.unpipe is not a function`, which surfaced as a 503 and
+    // left the reader spinning forever on any comic whose pages are deflated.
+    // Bridge through a native PassThrough so yauzl always gets the full
+    // Readable API; tear down the source when the bridge closes.
+    const bridge = new PassThrough()
+    src.on('error', (err) => bridge.destroy(err))
+    bridge.once('close', () => {
+      if (typeof src.destroy === 'function' && !src.destroyed) src.destroy()
+    })
+    src.pipe(bridge)
+    return bridge
   }
 }
 

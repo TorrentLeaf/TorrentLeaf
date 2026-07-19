@@ -86,7 +86,7 @@ func main() {
 	settingsRepo := repository.NewSettingsRepository(pool)
 	engineClient := service.NewEngineClient(cfg.TorrentEngineURL)
 	torrentSvc := service.NewTorrentService(sessionRepo, fileRepo, libraryRepo, settingsRepo, engineClient)
-	readerSvc := service.NewReaderService(sessionRepo, fileRepo, engineClient)
+	readerSvc := service.NewReaderService(sessionRepo, fileRepo, engineClient, torrentSvc)
 	progressSvc := service.NewProgressService(progressRepo, fileRepo, sessionRepo)
 	librarySvc := service.NewLibraryService(libraryRepo, favoritesRepo, sessionRepo)
 	adminSvc := service.NewAdminService(sessionRepo, engineClient)
@@ -114,12 +114,40 @@ func main() {
 	// from engine restarts (the engine stores no state in-process). We run
 	// this in a goroutine so it doesn't block the HTTP listener.
 	go func() {
-		if err := torrentSvc.ReseedEngine(context.Background()); err != nil {
+		if err := torrentSvc.ReseedEngineWithRetry(context.Background()); err != nil {
 			log.Warn().Err(err).Msg("engine reseed completed with errors")
 		} else {
 			log.Info().Msg("engine reseed completed successfully")
 		}
 	}()
+
+	// TTL eviction: periodically free disk for torrents idle past the TTL.
+	// Disabled when TORRENT_TTL_HOURS=0. Runs on a ticker in the background.
+	if cfg.TorrentTTLHours > 0 {
+		ttl := time.Duration(cfg.TorrentTTLHours) * time.Hour
+		go func() {
+			// Small initial delay so the first pass runs AFTER the startup
+			// reseed has loaded torrents into the engine. This ordering is
+			// deliberate, not just cosmetic: after a restart the engine holds no
+			// torrents, and EvictStale frees disk via engine.Remove(destroyStore),
+			// which is a no-op unless the torrent is currently in the engine. So
+			// reseed must re-add a stale torrent first for eviction to then
+			// destroy its on-disk data. Do NOT "optimize" this by having reseed
+			// skip stale torrents or touch them on re-add — either would leave
+			// genuinely-stale torrents un-evictable after every restart.
+			time.Sleep(2 * time.Minute)
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				if n, err := torrentSvc.EvictStale(context.Background(), ttl); err != nil {
+					log.Warn().Err(err).Msg("ttl eviction failed")
+				} else if n > 0 {
+					log.Info().Int("evicted", n).Msg("ttl eviction freed stale torrents")
+				}
+				<-ticker.C
+			}
+		}()
+	}
 
 	go func() {
 		addr := ":" + cfg.Port
@@ -253,6 +281,10 @@ func registerRoutes(app *fiber.App, d deps) {
 	protected.Post("/torrents",
 		middleware.RateLimitByUser(d.redis, "torrent-add", 10, time.Hour),
 		torrents.Add,
+	)
+	protected.Post("/torrents/file",
+		middleware.RateLimitByUser(d.redis, "torrent-add", 10, time.Hour),
+		torrents.AddFile,
 	)
 	protected.Get("/torrents", torrents.List)
 	protected.Get("/torrents/:id", torrents.Get)

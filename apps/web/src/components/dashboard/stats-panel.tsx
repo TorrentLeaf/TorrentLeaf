@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowUp } from 'lucide-react'
 
-import { fmtElapsed, fmtMB, fmtTime, type DashboardTorrent } from '@/lib/dashboard'
+import { fmtElapsed, fmtRate, fmtTime, type DashboardTorrent } from '@/lib/dashboard'
 
 export type StatCell = { label: string; value: string | number }
 
@@ -44,16 +44,16 @@ export function StatsPanel({ downRate, upRate, stats, downloadedMB = 0, uploaded
         <div className="flex items-baseline gap-2">
           <ArrowDown className="h-4 w-4 self-center text-info" strokeWidth={2.5} />
           <span className="text-[clamp(24px,2.6vw,30px)] font-semibold tabular-nums tracking-[-0.01em] text-foreground">
-            {fmtMB(downRate)}
+            {fmtRate(downRate).value}
           </span>
-          <span className="text-sm font-medium text-muted-foreground">MB/s</span>
+          <span className="text-sm font-medium text-muted-foreground">{fmtRate(downRate).unit}</span>
         </div>
         <div className="flex items-baseline gap-2">
           <ArrowUp className="h-4 w-4 self-center text-chart-upload" strokeWidth={2.5} />
           <span className="text-[clamp(24px,2.6vw,30px)] font-semibold tabular-nums tracking-[-0.01em] text-foreground">
-            {fmtMB(upRate)}
+            {fmtRate(upRate).value}
           </span>
-          <span className="text-sm font-medium text-muted-foreground">MB/s</span>
+          <span className="text-sm font-medium text-muted-foreground">{fmtRate(upRate).unit}</span>
         </div>
       </div>
 

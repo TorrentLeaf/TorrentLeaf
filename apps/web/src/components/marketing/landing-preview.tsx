@@ -19,8 +19,6 @@ import { cn } from '@/lib/utils'
 export function LandingPreview() {
   const dash = useAnimatedDashboard()
   const { isMobile, isTablet } = useViewport()
-  const [notifications, setNotifications] = useState(false)
-  const [darkTheme, setDarkTheme] = useState(true)
   const [chartMode, setChartMode] = useState<'download' | 'upload'>('download')
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
@@ -51,10 +49,8 @@ export function LandingPreview() {
               counts={dash.counts}
               filter={dash.filter}
               onFilterChange={dash.setFilter}
-              notifications={notifications}
-              onNotificationsChange={setNotifications}
-              darkTheme={darkTheme}
-              onDarkThemeChange={setDarkTheme}
+              libraryCounts={{ comics: 0, books: 0, pdfs: 0, video: 0, other: 0 }}
+              onLibraryFormat={() => {}}
               collapsed={isTablet}
             />
           )}

@@ -21,8 +21,13 @@ export function TransferChart({ history, downRate, mode = 'download', animateTip
   const H = 160
   const padX = 12
   const padY = 18
-  const max = 28
+  // Scale the y-axis to the data instead of a fixed MB/s ceiling, so real
+  // self-hosted rates (often B/s–KB/s ≈ a tiny fraction of an MB/s) fill the
+  // chart instead of flat-lining at the bottom. Headroom keeps the peak off
+  // the very top edge; the `|| 1` guards an all-zero history from dividing by 0.
   const min = 0
+  const dataMax = history.length ? Math.max(...history) : 0
+  const max = dataMax > 0 ? dataMax * 1.15 : 1
 
   const pts = history.map((v, i) => ({
     x: padX + (i / Math.max(1, history.length - 1)) * (W - padX * 2),
@@ -34,7 +39,7 @@ export function TransferChart({ history, downRate, mode = 'download', animateTip
   const last = pts[pts.length - 1]
 
   const base = mode === 'upload' ? 'hsl(var(--chart-upload))' : 'hsl(var(--info))'
-  const lowSpeed = mode === 'download' && downRate < 9
+  const lowSpeed = mode === 'download' && dataMax > 0 && downRate < dataMax * 0.3
   const tipColor = lowSpeed ? 'hsl(var(--warning))' : base
   const areaPath = `${d} L ${last.x} ${H - padY} L ${pts[0].x} ${H - padY} Z`
 

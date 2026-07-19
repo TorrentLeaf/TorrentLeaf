@@ -1,14 +1,21 @@
 import axios from 'axios'
 import Redis from 'ioredis'
-import { statfsSync } from 'node:fs'
+import parseTorrent from 'parse-torrent'
+import { mkdirSync } from 'node:fs'
 import { config } from '../config.js'
 import { logger } from '../logger.js'
 import { analyzeFiles, isBlocked, isSafePath } from '../files/detector.js'
+import { AddTorrentError } from './errors.js'
+import { assertDiskAvailable } from './disk.js'
+import { resolveDownloadPath } from './downloadPath.js'
 import { engine, type WTTorrent } from './engine.js'
 import type { TorrentStatus } from './types.js'
 
 const MAGNET_RE = /^magnet:\?xt=urn:btih:[a-fA-F0-9]{40}(&.*)?$/
 const MAGNET_MAX_LEN = 2048
+
+const diskUsedBytes = (): number =>
+  engine.list().reduce((sum, t) => sum + (t.downloaded ?? 0), 0)
 
 const redis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: null })
 let progressTimer: NodeJS.Timeout | null = null
@@ -43,21 +50,24 @@ export class TorrentManager {
    * If the torrent is already ready, returns full status with files.
    * Otherwise returns a minimal status — the metadata webhook fires later.
    */
-  add(magnetURI: string, downloadPath?: string): TorrentStatus {
+  add(magnetURI: string, downloadPath?: string, opts: { reseed?: boolean } = {}): TorrentStatus {
     if (magnetURI.length > MAGNET_MAX_LEN) {
-      throw new Error('magnet uri too long')
+      throw new AddTorrentError('invalid_magnet', 'magnet uri too long')
     }
     if (!MAGNET_RE.test(magnetURI)) {
-      throw new Error('invalid magnet uri')
+      throw new AddTorrentError('invalid_magnet', 'invalid magnet uri')
     }
 
     if (engine.list().length >= config.maxTorrents) {
-      throw new Error(`max torrents reached (${config.maxTorrents})`)
+      throw new AddTorrentError('max_torrents', `max torrents reached (${config.maxTorrents})`)
     }
 
-    this.assertDiskAvailable()
+    const resolvedPath = resolveDownloadPath(config.downloadPath, downloadPath)
+    // mkdir -p so statfs + webtorrent write to an existing dir
+    mkdirSync(resolvedPath, { recursive: true })
+    assertDiskAvailable(resolvedPath, opts, { usedBytes: diskUsedBytes })
 
-    const torrent = engine.add(magnetURI, downloadPath)
+    const torrent = engine.add(magnetURI, resolvedPath)
 
     if (torrent.ready && torrent.infoHash) {
       logger.info({ infoHash: torrent.infoHash, name: torrent.name }, 'torrent already ready')
@@ -85,38 +95,40 @@ export class TorrentManager {
   }
 
   /**
-   * Refuse new torrents when the disk is constrained. Two independent gates:
-   *  - free-space floor: the filesystem must have at least minFreeDiskGB free,
-   *    which prevents ENOSPC regardless of the budget;
-   *  - usage budget: the bytes already downloaded across active torrents must
-   *    be under maxDiskGB.
-   * Uses the engine's in-memory byte accounting + statfs, so there's no disk
-   * walk. Throws (→ 400 at the route) with a clear message.
+   * Add a torrent from a raw .torrent file buffer. Same disk guard + safe
+   * download-path resolution as `add`. Returns immediately; the metadata
+   * webhook fires later if the torrent isn't ready yet.
    */
-  private assertDiskAvailable(): void {
-    const GB = 1024 ** 3
-
+  async addFromFile(torrentFile: Buffer, downloadPath?: string): Promise<TorrentStatus> {
+    if (engine.list().length >= config.maxTorrents) {
+      throw new AddTorrentError('max_torrents', `max torrents reached (${config.maxTorrents})`)
+    }
+    // Parse the file up front so we always know the infoHash for the immediate
+    // response — webtorrent doesn't expose it synchronously after add(Buffer).
+    let parsed: { infoHash?: string; name?: string }
     try {
-      const st = statfsSync(config.downloadPath)
-      const freeBytes = st.bavail * st.bsize
-      if (freeBytes < config.minFreeDiskGB * GB) {
-        throw new Error(
-          `not enough free disk space (${(freeBytes / GB).toFixed(1)} GB free, ` +
-            `minimum ${config.minFreeDiskGB} GB)`,
-        )
-      }
-    } catch (err) {
-      // Re-throw our own guard; swallow statfs failures (e.g. path not yet
-      // created) so a measurement error never blocks adds on its own.
-      if (err instanceof Error && err.message.startsWith('not enough free disk')) throw err
+      parsed = (await parseTorrent(torrentFile)) as { infoHash?: string; name?: string }
+    } catch {
+      throw new AddTorrentError('invalid_upload', 'not a valid .torrent file')
     }
 
-    const usedBytes = engine.list().reduce((sum, t) => sum + (t.downloaded ?? 0), 0)
-    if (usedBytes >= config.maxDiskGB * GB) {
-      throw new Error(
-        `disk budget reached (${(usedBytes / GB).toFixed(1)} GB used, ` +
-          `limit ${config.maxDiskGB} GB)`,
-      )
+    const resolvedPath = resolveDownloadPath(config.downloadPath, downloadPath)
+    mkdirSync(resolvedPath, { recursive: true })
+    assertDiskAvailable(resolvedPath, {}, { usedBytes: diskUsedBytes })
+
+    const torrent = engine.add(torrentFile, resolvedPath)
+    if (torrent.ready && torrent.infoHash) return this.toStatus(torrent)
+    return {
+      infoHash: (torrent.infoHash || parsed.infoHash || '').toLowerCase(),
+      name: torrent.name || parsed.name || '',
+      ready: false,
+      progress: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      peers: 0,
+      length: 0,
+      downloaded: 0,
+      files: [],
     }
   }
 
@@ -126,8 +138,8 @@ export class TorrentManager {
     return this.toStatus(t)
   }
 
-  async remove(infoHash: string): Promise<void> {
-    await engine.remove(infoHash)
+  async remove(infoHash: string, opts: { destroyStore?: boolean } = {}): Promise<void> {
+    await engine.remove(infoHash, opts)
   }
 
   list(): TorrentStatus[] {
