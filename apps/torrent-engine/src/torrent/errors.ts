@@ -4,6 +4,7 @@ export type AddErrorCode =
   | 'max_torrents'
   | 'invalid_magnet'
   | 'invalid_path'
+  | 'invalid_upload'
 
 export class AddTorrentError extends Error {
   readonly code: AddErrorCode
