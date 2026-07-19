@@ -126,7 +126,15 @@ func main() {
 	if cfg.TorrentTTLHours > 0 {
 		ttl := time.Duration(cfg.TorrentTTLHours) * time.Hour
 		go func() {
-			// Small initial delay so eviction doesn't race the startup reseed.
+			// Small initial delay so the first pass runs AFTER the startup
+			// reseed has loaded torrents into the engine. This ordering is
+			// deliberate, not just cosmetic: after a restart the engine holds no
+			// torrents, and EvictStale frees disk via engine.Remove(destroyStore),
+			// which is a no-op unless the torrent is currently in the engine. So
+			// reseed must re-add a stale torrent first for eviction to then
+			// destroy its on-disk data. Do NOT "optimize" this by having reseed
+			// skip stale torrents or touch them on re-add — either would leave
+			// genuinely-stale torrents un-evictable after every restart.
 			time.Sleep(2 * time.Minute)
 			ticker := time.NewTicker(15 * time.Minute)
 			defer ticker.Stop()

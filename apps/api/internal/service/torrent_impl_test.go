@@ -306,6 +306,7 @@ type fakeEngine struct {
 	healthErrs     []error
 	healthCalls    int
 	removeDestroy  map[string]bool
+	removeErr      error
 }
 
 func (e *fakeEngine) Add(_ context.Context, magnet string, _ string, reseed bool) (EngineTorrentStatus, error) {
@@ -325,6 +326,9 @@ func (e *fakeEngine) AddFile(_ context.Context, _ []byte, _ string) (EngineTorre
 }
 
 func (e *fakeEngine) Remove(_ context.Context, hash string, destroyStore bool) error {
+	if e.removeErr != nil {
+		return e.removeErr
+	}
 	e.removeCalls = append(e.removeCalls, hash)
 	if e.removeDestroy != nil {
 		e.removeDestroy[hash] = destroyStore

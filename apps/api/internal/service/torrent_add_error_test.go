@@ -240,8 +240,34 @@ func TestEvictStale_MarkFailure_PreservesStore(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("mark failed → nothing counted as evicted, got %d", n)
 	}
-	if e.removeDestroy["stalehash"] {
-		t.Fatal("mark failed → store must be preserved, not destroyed")
+	if len(e.removeCalls) != 0 {
+		t.Fatalf("mark failed → engine must not be touched, got %v", e.removeCalls)
+	}
+}
+
+// If the engine removal fails, the disk wasn't actually freed and the torrent
+// is still running, so the session must be rolled back to its prior status
+// (not left 'evicted', which would never be stale-listed again) and not counted.
+func TestEvictStale_EngineRemoveFailure_RollsBack(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeErr = errors.New("engine unreachable")
+	ctx := context.Background()
+
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "stalehash", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	s.LastTouchedAt = time.Now().Add(-100 * time.Hour)
+	sr.sessions[s.ID] = s
+
+	n, err := svc.EvictStale(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("EvictStale: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("remove failed → nothing counted as evicted, got %d", n)
+	}
+	if got := sr.sessions[s.ID].Status; got != domain.StatusSeeding {
+		t.Fatalf("remove failed → status must roll back to seeding, got %s", got)
 	}
 }
 

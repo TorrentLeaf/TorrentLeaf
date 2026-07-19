@@ -549,19 +549,34 @@ func (s *torrentService) EvictStale(ctx context.Context, ttl time.Duration) (int
 		// Mark every session evicted BEFORE removing from the engine: wiping
 		// files while a referencing session still reads as downloading would
 		// leave it unrecoverable (EnsureAvailable only re-adds an evicted
-		// session). If any mark fails, keep the files (destroyStore=false) so the
-		// stranded session can still recover on its next read.
-		marked := 0
+		// session).
+		allMarked := true
 		for i := range group {
 			if err := s.sessions.MarkEvicted(ctx, group[i].ID); err != nil {
-				destroyStore = false
-				continue
+				allMarked = false
 			}
-			marked++
+		}
+		// Partial mark → skip the engine entirely: removing the torrent (even
+		// without destroyStore) would strand the session we couldn't evict, and
+		// EnsureAvailable won't re-add a session that still reads as downloading.
+		// The next cycle retries; sessions we did evict recover on read.
+		if !allMarked {
+			continue
 		}
 
-		_ = s.engine.Remove(ctx, infoHash, destroyStore) // best-effort
-		evicted += marked
+		// Free the disk. If the engine call fails, the data wasn't actually freed
+		// and the torrent is still running, so roll the sessions back to their
+		// prior status — an evicted session is never stale-listed again, so
+		// reporting it evicted here would leak the disk with no retry. (The
+		// rolled-back downloaded_bytes stays 0 until the next engine overlay
+		// refresh; that field is display-only.)
+		if err := s.engine.Remove(ctx, infoHash, destroyStore); err != nil {
+			for i := range group {
+				_ = s.sessions.UpdateStatus(ctx, group[i].ID, group[i].Status)
+			}
+			continue
+		}
+		evicted += len(group)
 	}
 	return evicted, nil
 }
