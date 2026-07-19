@@ -121,6 +121,26 @@ func main() {
 		}
 	}()
 
+	// TTL eviction: periodically free disk for torrents idle past the TTL.
+	// Disabled when TORRENT_TTL_HOURS=0. Runs on a ticker in the background.
+	if cfg.TorrentTTLHours > 0 {
+		ttl := time.Duration(cfg.TorrentTTLHours) * time.Hour
+		go func() {
+			// Small initial delay so eviction doesn't race the startup reseed.
+			time.Sleep(2 * time.Minute)
+			ticker := time.NewTicker(15 * time.Minute)
+			defer ticker.Stop()
+			for {
+				if n, err := torrentSvc.EvictStale(context.Background(), ttl); err != nil {
+					log.Warn().Err(err).Msg("ttl eviction failed")
+				} else if n > 0 {
+					log.Info().Int("evicted", n).Msg("ttl eviction freed stale torrents")
+				}
+				<-ticker.C
+			}
+		}()
+	}
+
 	go func() {
 		addr := ":" + cfg.Port
 		log.Info().Str("addr", addr).Msg("api server listening")
