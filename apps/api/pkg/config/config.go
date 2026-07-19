@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +26,7 @@ type Config struct {
 	MinioSecretKey     string
 	APIWebhookSecret   string
 	CORSAllowedOrigins string
+	TorrentTTLHours    int
 }
 
 func Load() (*Config, error) {
@@ -46,6 +48,7 @@ func Load() (*Config, error) {
 		MinioSecretKey:   os.Getenv("MINIO_SECRET_KEY"),
 		APIWebhookSecret:   os.Getenv("API_WEBHOOK_SECRET"),
 		CORSAllowedOrigins: os.Getenv("CORS_ALLOWED_ORIGINS"),
+		TorrentTTLHours:    getenvInt("TORRENT_TTL_HOURS", 72),
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -98,6 +101,15 @@ func (c *Config) IsProduction() bool {
 func getenv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getenvInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return fallback
 }
