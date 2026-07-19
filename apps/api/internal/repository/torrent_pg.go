@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,7 @@ func NewTorrentRepository(pool *pgxpool.Pool) TorrentRepository {
 
 const torrentSessionColumns = `id, user_id, info_hash, magnet_uri, name, status,
 	total_size, downloaded_bytes, peers_count, download_speed, upload_speed,
-	created_at, updated_at`
+	created_at, updated_at, last_touched_at`
 
 func (r *torrentRepo) Create(ctx context.Context, s domain.TorrentSession) (*domain.TorrentSession, error) {
 	const q = `
@@ -153,6 +154,55 @@ func (r *torrentRepo) CountByInfoHash(ctx context.Context, infoHash string) (int
 	return n, nil
 }
 
+func (r *torrentRepo) Touch(ctx context.Context, id uuid.UUID) error {
+	const q = `UPDATE torrent_sessions SET last_touched_at = NOW() WHERE id = $1`
+	_, err := r.pool.Exec(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("touch session: %w", err)
+	}
+	return nil
+}
+
+func (r *torrentRepo) ListStale(ctx context.Context, cutoff time.Time) ([]domain.TorrentSession, error) {
+	q := "SELECT " + torrentSessionColumns +
+		" FROM torrent_sessions WHERE status IN ('downloading','seeding') AND last_touched_at < $1"
+	rows, err := r.pool.Query(ctx, q, cutoff)
+	if err != nil {
+		return nil, fmt.Errorf("list stale: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.TorrentSession
+	for rows.Next() {
+		s, err := scanTorrentSession(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+func (r *torrentRepo) MarkEvicted(ctx context.Context, id uuid.UUID) error {
+	const q = `UPDATE torrent_sessions SET status = 'evicted', downloaded_bytes = 0, updated_at = NOW() WHERE id = $1`
+	tag, err := r.pool.Exec(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("mark evicted: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.NewError(domain.ErrNotFound, "torrent session not found", nil)
+	}
+	return nil
+}
+
+func (r *torrentRepo) CountActiveByInfoHash(ctx context.Context, infoHash string, excludeID uuid.UUID) (int, error) {
+	const q = `SELECT COUNT(*) FROM torrent_sessions WHERE info_hash = $1 AND status <> 'evicted' AND id <> $2`
+	var n int
+	if err := r.pool.QueryRow(ctx, q, infoHash, excludeID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count active by info hash: %w", err)
+	}
+	return n, nil
+}
+
 func (r *torrentRepo) getBy(ctx context.Context, where string, arg any) (*domain.TorrentSession, error) {
 	q := "SELECT " + torrentSessionColumns + " FROM torrent_sessions WHERE " + where + " LIMIT 1"
 	row := r.pool.QueryRow(ctx, q, arg)
@@ -173,7 +223,7 @@ func scanTorrentSession(r rowScanner) (*domain.TorrentSession, error) {
 	if err := r.Scan(
 		&s.ID, &s.UserID, &s.InfoHash, &magnet, &name, &s.Status,
 		&totalSize, &s.DownloadedBytes, &s.PeersCount, &s.DownloadSpeed, &s.UploadSpeed,
-		&s.CreatedAt, &s.UpdatedAt,
+		&s.CreatedAt, &s.UpdatedAt, &s.LastTouchedAt,
 	); err != nil {
 		return nil, err
 	}

@@ -155,6 +155,52 @@ func (r *fakeTorrentRepo) CountByInfoHash(_ context.Context, infoHash string) (i
 	return n, nil
 }
 
+func (r *fakeTorrentRepo) Touch(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.sessions[id]; ok {
+		s.LastTouchedAt = time.Now()
+	}
+	return nil
+}
+
+func (r *fakeTorrentRepo) ListStale(_ context.Context, cutoff time.Time) ([]domain.TorrentSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.TorrentSession
+	for _, s := range r.sessions {
+		if (s.Status == domain.StatusDownloading || s.Status == domain.StatusSeeding) &&
+			s.LastTouchedAt.Before(cutoff) {
+			out = append(out, *s)
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeTorrentRepo) MarkEvicted(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[id]
+	if !ok {
+		return domain.NewError(domain.ErrNotFound, "not found", nil)
+	}
+	s.Status = domain.StatusEvicted
+	s.DownloadedBytes = 0
+	return nil
+}
+
+func (r *fakeTorrentRepo) CountActiveByInfoHash(_ context.Context, infoHash string, excludeID uuid.UUID) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, s := range r.sessions {
+		if s.InfoHash == infoHash && s.Status != domain.StatusEvicted && s.ID != excludeID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 type fakeFileRepo struct {
 	mu    sync.Mutex
 	files map[uuid.UUID][]domain.TorrentFile

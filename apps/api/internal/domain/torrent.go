@@ -44,6 +44,7 @@ type TorrentSession struct {
 	Files           []TorrentFile
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	LastTouchedAt   time.Time `json:"lastTouchedAt"`
 }
 
 type TorrentFile struct {

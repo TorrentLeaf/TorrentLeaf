@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -20,6 +21,14 @@ type TorrentRepository interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	// CountByInfoHash returns how many sessions reference an info_hash (any user).
 	CountByInfoHash(ctx context.Context, infoHash string) (int, error)
+	// Touch bumps last_touched_at to now — an active-use signal for TTL eviction.
+	Touch(ctx context.Context, id uuid.UUID) error
+	// ListStale returns downloading/seeding sessions untouched since cutoff.
+	ListStale(ctx context.Context, cutoff time.Time) ([]domain.TorrentSession, error)
+	// MarkEvicted flags a session evicted and zeroes downloaded_bytes.
+	MarkEvicted(ctx context.Context, id uuid.UUID) error
+	// CountActiveByInfoHash counts non-evicted sessions for a hash, excluding one id.
+	CountActiveByInfoHash(ctx context.Context, infoHash string, excludeID uuid.UUID) (int, error)
 }
 
 type TorrentFileRepository interface {
