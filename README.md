@@ -46,11 +46,11 @@ Paste a magnet link and start reading manga, books and documents — or watch vi
 
 ![Library / Dashboard](docs/screenshots/Dashboard.png)
 
-### Manga Reader
+### Reader
 
-![Manga Reader](docs/screenshots/Reader-1.png)
+![Reader](docs/screenshots/Reader-1.png)
 
-![Manga Reader](docs/screenshots/Reader-2.png)
+![Reader](docs/screenshots/Reader-2.png)
 
 ### Video Player
 
