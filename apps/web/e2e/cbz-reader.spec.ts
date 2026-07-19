@@ -183,11 +183,10 @@ test.describe('CBZ reading flow', () => {
 
     await page.goto(`/read/manga/${SESSION_ID}?fileId=${CBZ_FILE_ID}`)
 
-    // Loading or "not ready" copy shows briefly. Timeout matches the other
-    // reader assertions (10s+) to tolerate cold dev-mode route compilation in CI.
-    await expect(
-      page.getByText(/Archive not ready|Loading/i).first(),
-    ).toBeVisible({ timeout: 15_000 })
+    // While the 503 is retried, the reader shows its loading skeleton (React
+    // Query keeps the query pending across retries, so isError never flips —
+    // the skeleton, not the "waiting for pieces" copy, is what renders here).
+    await expect(page.getByTestId('manga-reader-loading')).toBeVisible({ timeout: 15_000 })
 
     // Retry lands, pages materialize, page counter shows "1 / 2".
     await expect(page.getByText('1 / 2')).toBeVisible({ timeout: 15_000 })
