@@ -42,19 +42,27 @@ Paste a magnet link and start reading manga, books and documents — or watch vi
 
 ## Screenshots
 
-> _Images live in [`docs/screenshots/`](docs/screenshots/). Replace the placeholders below with real captures._
+### Library / Dashboard
 
-| Library / Dashboard | Manga Reader |
-| :---: | :---: |
-| ![Library dashboard](docs/screenshots/library.png) | ![Manga reader](docs/screenshots/reader-manga.png) |
+![Library / Dashboard](docs/screenshots/Dashboard.png)
 
-| Video Player | PDF / EPUB Reader |
-| :---: | :---: |
-| ![Video player](docs/screenshots/video-player.png) | ![Document reader](docs/screenshots/reader-document.png) |
+### Manga Reader
 
-| Add Torrent | Settings |
-| :---: | :---: |
-| ![Add torrent](docs/screenshots/add.png) | ![Settings](docs/screenshots/settings.png) |
+![Manga Reader](docs/screenshots/Reader-1.png)
+
+![Manga Reader](docs/screenshots/Reader-2.png)
+
+### Video Player
+
+![Video Player](docs/screenshots/VideoPlayer.png)
+
+### Add Torrent
+
+![Add Torrent](docs/screenshots/AddTorrent.png)
+
+### Settings
+
+![Settings](docs/screenshots/Settings.png)
 
 ---
 
