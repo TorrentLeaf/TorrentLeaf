@@ -516,26 +516,52 @@ func (s *torrentService) ReseedEngineWithRetry(ctx context.Context) error {
 
 // EvictStale frees disk for torrents idle past ttl. The session and reading
 // progress are preserved (status→evicted, downloaded_bytes→0); reading re-adds
-// via EnsureAvailable. destroyStore only fires when no other active session
-// shares the info_hash.
+// via EnsureAvailable. destroyStore only fires when no session outside the
+// stale set still references the info_hash.
 func (s *torrentService) EvictStale(ctx context.Context, ttl time.Duration) (int, error) {
 	cutoff := time.Now().Add(-ttl)
 	stale, err := s.sessions.ListStale(ctx, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("evict: list stale: %w", err)
 	}
-	evicted := 0
+
+	// Group by info_hash: every session sharing a hash points at the same files
+	// on disk, so the engine removal (and the destroyStore decision) must be
+	// made once per hash. Removing per-session would take the torrent out of the
+	// engine on the first Remove, making every later destroyStore Remove a no-op
+	// and leaking the files.
+	byHash := make(map[string][]domain.TorrentSession)
 	for i := range stale {
-		sess := stale[i]
+		byHash[stale[i].InfoHash] = append(byHash[stale[i].InfoHash], stale[i])
+	}
+
+	evicted := 0
+	for infoHash, group := range byHash {
+		// destroyStore only when no session outside this stale group still
+		// references the hash. CountActiveByInfoHash counts non-evicted sessions
+		// other than the excluded one; the remaining len(group)-1 stale sessions
+		// are still non-evicted here, so subtract them to get outside references.
 		destroyStore := false
-		if n, cErr := s.sessions.CountActiveByInfoHash(ctx, sess.InfoHash, sess.ID); cErr == nil && n == 0 {
-			destroyStore = true
+		if n, cErr := s.sessions.CountActiveByInfoHash(ctx, infoHash, group[0].ID); cErr == nil {
+			destroyStore = n-(len(group)-1) <= 0
 		}
-		_ = s.engine.Remove(ctx, sess.InfoHash, destroyStore) // best-effort
-		if err := s.sessions.MarkEvicted(ctx, sess.ID); err != nil {
-			continue
+
+		// Mark every session evicted BEFORE removing from the engine: wiping
+		// files while a referencing session still reads as downloading would
+		// leave it unrecoverable (EnsureAvailable only re-adds an evicted
+		// session). If any mark fails, keep the files (destroyStore=false) so the
+		// stranded session can still recover on its next read.
+		marked := 0
+		for i := range group {
+			if err := s.sessions.MarkEvicted(ctx, group[i].ID); err != nil {
+				destroyStore = false
+				continue
+			}
+			marked++
 		}
-		evicted++
+
+		_ = s.engine.Remove(ctx, infoHash, destroyStore) // best-effort
+		evicted += marked
 	}
 	return evicted, nil
 }

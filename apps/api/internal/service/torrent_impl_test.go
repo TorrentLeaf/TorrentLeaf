@@ -21,6 +21,9 @@ type fakeTorrentRepo struct {
 	mu       sync.Mutex
 	sessions map[uuid.UUID]*domain.TorrentSession
 	byHash   map[string]*domain.TorrentSession
+	// markEvictedFail forces MarkEvicted to error for these ids (tests the
+	// evict path where a session can't be flagged evicted).
+	markEvictedFail map[uuid.UUID]bool
 }
 
 func newFakeTorrentRepo() *fakeTorrentRepo {
@@ -180,6 +183,9 @@ func (r *fakeTorrentRepo) ListStale(_ context.Context, cutoff time.Time) ([]doma
 func (r *fakeTorrentRepo) MarkEvicted(_ context.Context, id uuid.UUID) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.markEvictedFail[id] {
+		return domain.NewError(domain.ErrUnavailable, "mark evicted failed", nil)
+	}
 	s, ok := r.sessions[id]
 	if !ok {
 		return domain.NewError(domain.ErrNotFound, "not found", nil)

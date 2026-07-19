@@ -144,6 +144,107 @@ func TestEvictStale_EvictsAndFreesDiskOnLastReference(t *testing.T) {
 	}
 }
 
+// Two users share one info_hash and both go stale in the same pass. The engine
+// removal must happen exactly once and carry destroyStore=true — the old
+// per-session loop issued a destroyStore=false remove first (taking the torrent
+// out of the engine) then a destroyStore=true remove that no-op'd, leaking the
+// files. Both sessions must end up evicted.
+func TestEvictStale_SharedHash_SingleDestroyingRemove(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	ctx := context.Background()
+
+	var ids []uuid.UUID
+	for i := 0; i < 2; i++ {
+		s, _ := sr.Create(ctx, domain.TorrentSession{
+			UserID: uuid.New(), InfoHash: "sharedhash", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+		})
+		s.LastTouchedAt = time.Now().Add(-100 * time.Hour)
+		sr.sessions[s.ID] = s
+		ids = append(ids, s.ID)
+	}
+
+	n, err := svc.EvictStale(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("EvictStale: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("want 2 evicted, got %d", n)
+	}
+	if len(e.removeCalls) != 1 {
+		t.Fatalf("shared hash must be removed exactly once, got %d calls: %v", len(e.removeCalls), e.removeCalls)
+	}
+	if !e.removeDestroy["sharedhash"] {
+		t.Fatal("last-reference removal must destroy the store")
+	}
+	for _, id := range ids {
+		if got := sr.sessions[id].Status; got != domain.StatusEvicted {
+			t.Fatalf("session %s: want evicted, got %s", id, got)
+		}
+	}
+}
+
+// A session outside the stale set still references the hash → files must be
+// kept (destroyStore=false); only the stale session is evicted.
+func TestEvictStale_SharedHash_KeepsFilesWhenOutsideReferenceActive(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	ctx := context.Background()
+
+	stale, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "sharedhash", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	stale.LastTouchedAt = time.Now().Add(-100 * time.Hour)
+	sr.sessions[stale.ID] = stale
+
+	active, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "sharedhash", MagnetURI: validMagnet, Status: domain.StatusDownloading,
+	})
+	active.LastTouchedAt = time.Now() // fresh → not stale
+	sr.sessions[active.ID] = active
+
+	n, err := svc.EvictStale(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("EvictStale: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("want 1 evicted, got %d", n)
+	}
+	if e.removeDestroy["sharedhash"] {
+		t.Fatal("outside reference still active — files must NOT be destroyed")
+	}
+	if got := sr.sessions[active.ID].Status; got != domain.StatusDownloading {
+		t.Fatalf("active session must be untouched, got %s", got)
+	}
+}
+
+// If a session can't be flagged evicted, the store must not be destroyed —
+// otherwise the files vanish while the session still reads as downloading and
+// EnsureAvailable refuses to recover it.
+func TestEvictStale_MarkFailure_PreservesStore(t *testing.T) {
+	svc, sr, _, e := newTestTorrentSvc()
+	e.removeDestroy = map[string]bool{}
+	ctx := context.Background()
+
+	s, _ := sr.Create(ctx, domain.TorrentSession{
+		UserID: uuid.New(), InfoHash: "stalehash", MagnetURI: validMagnet, Status: domain.StatusSeeding,
+	})
+	s.LastTouchedAt = time.Now().Add(-100 * time.Hour)
+	sr.sessions[s.ID] = s
+	sr.markEvictedFail = map[uuid.UUID]bool{s.ID: true}
+
+	n, err := svc.EvictStale(ctx, 72*time.Hour)
+	if err != nil {
+		t.Fatalf("EvictStale: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("mark failed → nothing counted as evicted, got %d", n)
+	}
+	if e.removeDestroy["stalehash"] {
+		t.Fatal("mark failed → store must be preserved, not destroyed")
+	}
+}
+
 func TestEnsureAvailable_ReAddsEvicted(t *testing.T) {
 	svc, sr, _, e := newTestTorrentSvc()
 	ctx := context.Background()
