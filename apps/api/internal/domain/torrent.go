@@ -14,6 +14,7 @@ const (
 	StatusSeeding          TorrentStatus = "seeding"
 	StatusPaused           TorrentStatus = "paused"
 	StatusError            TorrentStatus = "error"
+	StatusEvicted          TorrentStatus = "evicted"
 )
 
 type FileType string
