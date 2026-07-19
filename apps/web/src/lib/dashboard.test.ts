@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   fmtTime,
   fmtMB,
+  fmtRate,
   fmtElapsed,
   timeLeftLabel,
   applyFilter,
@@ -44,6 +45,16 @@ describe('fmtMB / fmtElapsed / bytesToMB', () => {
     expect(fmtMB(3.14159)).toBe('3.1')
     expect(fmtElapsed(125)).toBe('2 min 05 sec')
     expect(bytesToMB(1024 * 1024)).toBe(1)
+  })
+})
+
+describe('fmtRate (adaptive units)', () => {
+  it('picks B/s, KB/s or MB/s so small seeding rates stay visible', () => {
+    const MB = 1024 * 1024
+    expect(fmtRate(0)).toEqual({ value: '0', unit: 'B/s' })
+    expect(fmtRate(184 / MB)).toEqual({ value: '184', unit: 'B/s' })
+    expect(fmtRate(0.5)).toEqual({ value: '512.0', unit: 'KB/s' })
+    expect(fmtRate(3.14159)).toEqual({ value: '3.1', unit: 'MB/s' })
   })
 })
 

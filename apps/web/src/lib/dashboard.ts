@@ -76,6 +76,17 @@ import type { LibraryItemType } from './library'
 const MB = 1024 * 1024
 export const bytesToMB = (b: number): number => b / MB
 
+// Adaptive transfer-rate label from a value in MB/s. Self-hosted seeding runs
+// at B/s–KB/s, which rounds to "0.0" at MB scale, so pick the unit that shows
+// real digits. Value and unit are returned separately so callers can style the
+// big number and its small unit independently.
+export function fmtRate(mbPerSec: number): { value: string; unit: string } {
+  const bytesPerSec = Math.max(0, mbPerSec) * MB
+  if (bytesPerSec < 1024) return { value: Math.round(bytesPerSec).toString(), unit: 'B/s' }
+  if (bytesPerSec < MB) return { value: (bytesPerSec / 1024).toFixed(1), unit: 'KB/s' }
+  return { value: mbPerSec.toFixed(1), unit: 'MB/s' }
+}
+
 // Engine statuses → the dashboard's 3-state model.
 function mapStatus(s: TorrentSession['status']): TorrentStatus {
   if (s === 'seeding') return 'se'
