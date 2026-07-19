@@ -32,7 +32,7 @@ func TestNaturalLessOrdersNumericFilenames(t *testing.T) {
 func TestListPagesFiltersImagesAndSortsNaturally(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
-	svc := NewReaderService(sessions, files, nil)
+	svc := NewReaderService(sessions, files, nil, nil)
 	userID := uuid.New()
 
 	session, err := sessions.Create(context.Background(), domain.TorrentSession{
@@ -73,7 +73,7 @@ func TestListPagesExpandsCbzEntries(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
 	engine := &fakeEngine{archiveEntries: map[string][]EngineArchiveEntry{}}
-	svc := NewReaderService(sessions, files, engine)
+	svc := NewReaderService(sessions, files, engine, nil)
 	userID := uuid.New()
 	hash := "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
@@ -125,7 +125,7 @@ func TestListPagesPropagatesArchiveError(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
 	engine := &fakeEngine{archiveErr: errors.New("engine down")}
-	svc := NewReaderService(sessions, files, engine)
+	svc := NewReaderService(sessions, files, engine, nil)
 	userID := uuid.New()
 
 	session, _ := sessions.Create(context.Background(), domain.TorrentSession{
@@ -144,7 +144,7 @@ func TestListPagesPropagatesArchiveError(t *testing.T) {
 func TestListPagesScopesByUser(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
-	svc := NewReaderService(sessions, files, nil)
+	svc := NewReaderService(sessions, files, nil, nil)
 
 	owner := uuid.New()
 	session, _ := sessions.Create(context.Background(), domain.TorrentSession{
@@ -165,7 +165,7 @@ func TestListPagesScopedToSingleFile(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
 	engine := &fakeEngine{archiveEntries: map[string][]EngineArchiveEntry{}}
-	svc := NewReaderService(sessions, files, engine)
+	svc := NewReaderService(sessions, files, engine, nil)
 	userID := uuid.New()
 	hash := "1111111111111111111111111111111111111111"
 
@@ -191,7 +191,7 @@ func TestListPagesScopedToSingleFile(t *testing.T) {
 func TestResolveStreamTargetReturnsUpstreamCoords(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
-	svc := NewReaderService(sessions, files, nil)
+	svc := NewReaderService(sessions, files, nil, nil)
 	userID := uuid.New()
 	hash := "3333333333333333333333333333333333333333"
 
@@ -227,7 +227,7 @@ func TestResolveStreamTargetReturnsUpstreamCoords(t *testing.T) {
 func TestResolveStreamTargetScopesByUser(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
-	svc := NewReaderService(sessions, files, nil)
+	svc := NewReaderService(sessions, files, nil, nil)
 	owner := uuid.New()
 
 	session, _ := sessions.Create(context.Background(), domain.TorrentSession{
@@ -249,7 +249,7 @@ func TestResolveStreamTargetScopesByUser(t *testing.T) {
 func TestResolveStreamTargetMissingFile(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
-	svc := NewReaderService(sessions, files, nil)
+	svc := NewReaderService(sessions, files, nil, nil)
 
 	_, err := svc.ResolveStreamTarget(context.Background(), uuid.New(), uuid.New())
 	var de *domain.Error
@@ -262,7 +262,7 @@ func TestListPagesArchiveNotReadyMapsToUnavailable(t *testing.T) {
 	sessions := newFakeTorrentRepo()
 	files := newFakeFileRepo()
 	engine := &fakeEngine{archiveErr: ErrArchiveNotReady}
-	svc := NewReaderService(sessions, files, engine)
+	svc := NewReaderService(sessions, files, engine, nil)
 	userID := uuid.New()
 
 	session, _ := sessions.Create(context.Background(), domain.TorrentSession{

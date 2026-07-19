@@ -68,6 +68,9 @@ func (s *progressService) Update(
 	if err := s.checkOwnership(ctx, userID, fileID); err != nil {
 		return nil, err
 	}
+	if file, err := s.files.GetByID(ctx, fileID); err == nil {
+		_ = s.sessions.Touch(ctx, file.SessionID)
+	}
 	return s.progress.Upsert(ctx, domain.ReadingProgress{
 		UserID:      userID,
 		FileID:      fileID,
