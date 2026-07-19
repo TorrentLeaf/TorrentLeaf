@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -85,6 +86,14 @@ func (f *fakeTorrentService) ReseedEngine(_ context.Context) error {
 }
 
 func (f *fakeTorrentService) ReseedEngineWithRetry(_ context.Context) error {
+	return nil
+}
+
+func (f *fakeTorrentService) EvictStale(_ context.Context, _ time.Duration) (int, error) {
+	return 0, nil
+}
+
+func (f *fakeTorrentService) EnsureAvailable(_ context.Context, _ uuid.UUID) error {
 	return nil
 }
 
